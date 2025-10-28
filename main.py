@@ -9,7 +9,7 @@ from calcoli import calcola_pianeti_da_df, df_tutti
 # -------------------------------------------------------------
 # CONFIGURAZIONE BASE
 # -------------------------------------------------------------
-app = FastAPI(title="Chatbot Backend GPT con fallback", version="2.1")
+app = FastAPI(title="Chatbot Backend GPT con fallback e model_used", version="2.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Client OpenAI (compatibile con org opzionale)
+# Client OpenAI (compatibile anche con organizzazione)
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
     organization=os.environ.get("OPENAI_ORG")
@@ -65,7 +65,7 @@ load_cache()
 def home():
     return {
         "status": "ok",
-        "message": "Backend GPT + cache attivo con fallback automatico",
+        "message": "Backend GPT con fallback automatico e model_used",
         "cached_entries": len(cache)
     }
 
@@ -92,6 +92,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
         return {
             "status": "ok",
             "cached": True,
+            "model_used": cache[key].get("model_used", "unknown"),
             "giorno": giorno,
             "mese": mese,
             "anno": anno,
@@ -120,6 +121,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
     modello_principale = "gpt-4o-mini"
     modello_backup = "gpt-3.5-turbo"
     testo_gpt = ""
+    modello_usato = ""
 
     try:
         response = client.chat.completions.create(
@@ -132,6 +134,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
             max_tokens=300
         )
         testo_gpt = response.choices[0].message.content
+        modello_usato = modello_principale
         print(f"✅ Risposta ottenuta da {modello_principale}")
     except Exception as e1:
         print(f"⚠️ Errore con {modello_principale}: {e1}")
@@ -146,15 +149,18 @@ async def run(request: Request, authorization: str | None = Header(None)):
                 max_tokens=300
             )
             testo_gpt = response.choices[0].message.content
+            modello_usato = modello_backup
             print(f"✅ Fallback su {modello_backup} riuscito")
         except Exception as e2:
             testo_gpt = f"Errore GPT su entrambi i modelli: {e2}"
+            modello_usato = "none"
             print(f"❌ GPT completamente fallito: {e2}")
 
     # 💾 Salvataggio in cache
     cache[key] = {
         "valori_raw": valori_raw,
-        "interpretazione": testo_gpt
+        "interpretazione": testo_gpt,
+        "model_used": modello_usato
     }
     save_cache()
 
@@ -162,6 +168,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
     return {
         "status": "ok",
         "cached": False,
+        "model_used": modello_usato,
         "giorno": giorno,
         "mese": mese,
         "anno": anno,
