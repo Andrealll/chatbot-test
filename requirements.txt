@@ -3,3 +3,7 @@ uvicorn
 pandas
 openai>=1.0.0
 openpyxl
+pyswisseph
+geopy
+timezonefinder
+pytz
