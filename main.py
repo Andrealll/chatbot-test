@@ -1,98 +1,37 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
-import os, time
-from calcoli import calcola_pianeti_da_df, df_tutti
+import time
+from calcoli import calcola_asc_mc_case, calcola_pianeti_da_df, genera_carta_base64, interpreta_groq, df_tutti
 
-# -------------------------------------------------------------
-# CONFIGURAZIONE
-# -------------------------------------------------------------
-VERSION = "3.2"
-app = FastAPI(title=f"Chatbot Backend Groq v{VERSION}")
+app = FastAPI(title="AstroBot v3", version="3.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔒 restringi in produzione
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
 
-# 🧠 Client Groq - compatibile OpenAI
-client = OpenAI(
-    api_key=os.environ.get("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
-
-# -------------------------------------------------------------
 @app.get("/")
-def home():
-    return {
-        "status": "ok",
-        "message": f"Backend Groq v{VERSION} attivo (valori normalizzati)",
-    }
+def root():
+    return {"status": "ok", "message": "AstroBot v3 online 🪐"}
 
-# -------------------------------------------------------------
-@app.post("/run")
-async def run(request: Request):
-    data = await request.json()
-    giorno, mese, anno = int(data["giorno"]), int(data["mese"]), int(data["anno"])
-
-    # Calcolo pianeti (usa vettore senza segni)
-    _, valori_norm = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
-    testo_pianeti = "\n".join([f"{k}: {v:.2f}°" for k, v in valori_norm.items()])
-
-    prompt = f"""
-    Data: {giorno}/{mese}/{anno}
-    Pianeti (valori normalizzati):
-    {testo_pianeti}
-
-    Genera una breve interpretazione astrologica in italiano, tono professionale e positivo.
-    """
-
-    # ---------------------------------------------------------
-    # Chiamata Groq (Llama 3.3 con fallback automatico)
-    # ---------------------------------------------------------
-    t0 = time.time()
-    messages = [
-        {"role": "system", "content": "Sei un esperto astrologo che scrive con chiarezza e ispirazione."},
-        {"role": "user", "content": prompt}
-    ]
-
+@app.get("/tema")
+def tema(
+    citta: str, giorno: int, mese: int, anno: int, ora: int, minuti: int
+):
+    start = time.time()
     try:
-        # Modello principale
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # ✅ modello attivo su Groq
-            messages=messages,
-            temperature=0.7,
-            max_tokens=500
-        )
-        testo_groq = resp.choices[0].message.content
-        model_used = resp.model
-    except Exception as e1:
-        # Fallback su modello più leggero
-        try:
-            resp = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500
-            )
-            testo_groq = resp.choices[0].message.content
-            model_used = resp.model
-        except Exception as e2:
-            testo_groq = f"Errore Groq su entrambi i modelli: {e2}"
-            model_used = "none"
-
-    elapsed = int((time.time() - t0) * 1000)
-
-    return {
-        "status": "ok",
-        "model_used": model_used,
-        "giorno": giorno,
-        "mese": mese,
-        "anno": anno,
-        "valori_raw": valori_norm,  # mantiene stesso nome per compatibilità
-        "interpretazione": testo_groq,
-        "response_time_ms": elapsed
-    }
+        asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti)
+        pianeti_raw, _ = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
+        img_b64 = genera_carta_base64(anno, mese, giorno, ora, minuti, citta)
+        interpretazione = interpreta_groq(asc, pianeti_raw)
+        return {
+            "status": "ok",
+            "ascendente": asc,
+            "pianeti": pianeti_raw,
+            "interpretazione": interpretazione,
+            "image_base64": img_b64,
+            "elapsed_ms": int((time.time() - start)*1000)
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
