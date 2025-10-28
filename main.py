@@ -56,7 +56,7 @@ async def run(request: Request):
     t0 = time.time()
     try:
         resp = client.chat.completions.create(
-            model="llama-3.2-90b-text-preview", 
+            model="llama-3.3-70b-versatile", 
             messages=[
                 {"role": "system", "content": "Sei un esperto astrologo che scrive con chiarezza e ispirazione."},
                 {"role": "user", "content": prompt}
