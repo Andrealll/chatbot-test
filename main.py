@@ -7,12 +7,12 @@ from calcoli import calcola_pianeti_da_df, df_tutti
 # -------------------------------------------------------------
 # CONFIGURAZIONE
 # -------------------------------------------------------------
-VERSION = "3.1"
+VERSION = "3.2"
 app = FastAPI(title=f"Chatbot Backend Groq v{VERSION}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔒 limita in produzione
+    allow_origins=["*"],  # 🔒 restringi in produzione
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,7 +29,7 @@ client = OpenAI(
 def home():
     return {
         "status": "ok",
-        "message": f"Backend Groq v{VERSION} attivo",
+        "message": f"Backend Groq v{VERSION} attivo (valori normalizzati)",
     }
 
 # -------------------------------------------------------------
@@ -38,37 +38,51 @@ async def run(request: Request):
     data = await request.json()
     giorno, mese, anno = int(data["giorno"]), int(data["mese"]), int(data["anno"])
 
-    # Calcolo pianeti
-    valori_raw, _ = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
-    testo_pianeti = "\n".join([f"{k}: {v:.2f}°" for k, v in valori_raw.items()])
+    # Calcolo pianeti (usa vettore senza segni)
+    _, valori_norm = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
+    testo_pianeti = "\n".join([f"{k}: {v:.2f}°" for k, v in valori_norm.items()])
 
     prompt = f"""
     Data: {giorno}/{mese}/{anno}
-    Pianeti:
+    Pianeti (valori normalizzati):
     {testo_pianeti}
 
     Genera una breve interpretazione astrologica in italiano, tono professionale e positivo.
     """
 
     # ---------------------------------------------------------
-    # Chiamata Groq (Llama 3.1)
+    # Chiamata Groq (Llama 3.3 con fallback automatico)
     # ---------------------------------------------------------
     t0 = time.time()
+    messages = [
+        {"role": "system", "content": "Sei un esperto astrologo che scrive con chiarezza e ispirazione."},
+        {"role": "user", "content": prompt}
+    ]
+
     try:
+        # Modello principale
         resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile", 
-            messages=[
-                {"role": "system", "content": "Sei un esperto astrologo che scrive con chiarezza e ispirazione."},
-                {"role": "user", "content": prompt}
-            ],
+            model="llama-3.3-70b-versatile",  # ✅ modello attivo su Groq
+            messages=messages,
             temperature=0.7,
             max_tokens=500
         )
         testo_groq = resp.choices[0].message.content
         model_used = resp.model
-    except Exception as e:
-        testo_groq = f"Errore Groq: {e}"
-        model_used = "none"
+    except Exception as e1:
+        # Fallback su modello più leggero
+        try:
+            resp = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500
+            )
+            testo_groq = resp.choices[0].message.content
+            model_used = resp.model
+        except Exception as e2:
+            testo_groq = f"Errore Groq su entrambi i modelli: {e2}"
+            model_used = "none"
 
     elapsed = int((time.time() - t0) * 1000)
 
@@ -78,7 +92,7 @@ async def run(request: Request):
         "giorno": giorno,
         "mese": mese,
         "anno": anno,
-        "valori_raw": valori_raw,
+        "valori_raw": valori_norm,  # mantiene stesso nome per compatibilità
         "interpretazione": testo_groq,
         "response_time_ms": elapsed
     }
