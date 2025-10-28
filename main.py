@@ -9,7 +9,7 @@ from calcoli import calcola_pianeti_da_df, df_tutti
 # -------------------------------------------------------------
 # CONFIGURAZIONE BASE
 # -------------------------------------------------------------
-app = FastAPI(title="Chatbot Backend GPT-4o-mini", version="2.0")
+app = FastAPI(title="Chatbot Backend GPT con fallback", version="2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,10 +19,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inizializza client OpenAI (nuovo SDK)
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Client OpenAI (compatibile con org opzionale)
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    organization=os.environ.get("OPENAI_ORG")
+)
 
-# File cache temporanea (vive finché il container è attivo)
+# File cache locale
 CACHE_FILE = Path("/tmp/cache_gpt.json")
 cache = {}
 
@@ -62,7 +65,7 @@ load_cache()
 def home():
     return {
         "status": "ok",
-        "message": "Backend GPT-4o-mini + cache attivo",
+        "message": "Backend GPT + cache attivo con fallback automatico",
         "cached_entries": len(cache)
     }
 
@@ -71,12 +74,11 @@ def home():
 # -------------------------------------------------------------
 @app.post("/run")
 async def run(request: Request, authorization: str | None = Header(None)):
-    # 🔐 Controllo token opzionale
+    # 🔐 Token opzionale
     API_TOKEN = os.environ.get("API_TOKEN")
     if API_TOKEN and authorization != f"Bearer {API_TOKEN}":
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 📥 Lettura dati utente
     data = await request.json()
     giorno = safe_int(data.get("giorno"), 1)
     mese = safe_int(data.get("mese"), 1)
@@ -84,7 +86,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
 
     key = f"{giorno}-{mese}-{anno}"
 
-    # ⚡ Se la data è già in cache → ritorna subito
+    # ⚡ Se la data è già in cache
     if key in cache:
         print(f"⚡ Risposta GPT presa da cache per {key}")
         return {
@@ -105,7 +107,7 @@ async def run(request: Request, authorization: str | None = Header(None)):
 
     testo_pianeti = "\n".join([f"{k}: {v:.2f}°" for k, v in valori_raw.items()])
 
-    # ✍️ Prompt per GPT-4o-mini
+    # ✍️ Prompt per GPT
     prompt = f"""
     Oggi è il {giorno}/{mese}/{anno}.
     Ecco le posizioni planetarie (in gradi):
@@ -114,10 +116,14 @@ async def run(request: Request, authorization: str | None = Header(None)):
     Scrivi una breve sintesi interpretativa in italiano, tono professionale e positivo.
     """
 
-    # 💬 Chiamata GPT-4o-mini con nuovo SDK
+    # 💬 Chiamata GPT con fallback automatico
+    modello_principale = "gpt-4o-mini"
+    modello_backup = "gpt-3.5-turbo"
+    testo_gpt = ""
+
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=modello_principale,
             messages=[
                 {"role": "system", "content": "Sei un esperto di astrologia che spiega con chiarezza e ispirazione."},
                 {"role": "user", "content": prompt}
@@ -126,11 +132,26 @@ async def run(request: Request, authorization: str | None = Header(None)):
             max_tokens=300
         )
         testo_gpt = response.choices[0].message.content
-    except Exception as e:
-        testo_gpt = f"Errore GPT: {str(e)}"
-        print("⚠️ Errore GPT:", e)
+        print(f"✅ Risposta ottenuta da {modello_principale}")
+    except Exception as e1:
+        print(f"⚠️ Errore con {modello_principale}: {e1}")
+        try:
+            response = client.chat.completions.create(
+                model=modello_backup,
+                messages=[
+                    {"role": "system", "content": "Sei un esperto di astrologia che spiega con chiarezza e ispirazione."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=300
+            )
+            testo_gpt = response.choices[0].message.content
+            print(f"✅ Fallback su {modello_backup} riuscito")
+        except Exception as e2:
+            testo_gpt = f"Errore GPT su entrambi i modelli: {e2}"
+            print(f"❌ GPT completamente fallito: {e2}")
 
-    # 💾 Salva in cache
+    # 💾 Salvataggio in cache
     cache[key] = {
         "valori_raw": valori_raw,
         "interpretazione": testo_gpt
@@ -147,4 +168,3 @@ async def run(request: Request, authorization: str | None = Header(None)):
         "valori_raw": valori_raw,
         "interpretazione": testo_gpt
     }
-
