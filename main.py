@@ -1,26 +1,26 @@
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import os
-import openai
 import json
 from pathlib import Path
+from openai import OpenAI
 from calcoli import calcola_pianeti_da_df, df_tutti
 
 # -------------------------------------------------------------
 # CONFIGURAZIONE BASE
 # -------------------------------------------------------------
-app = FastAPI(title="Chatbot Backend GPT-4o-mini", version="1.0")
+app = FastAPI(title="Chatbot Backend GPT-4o-mini", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # per ora libero, puoi restringerlo in futuro
+    allow_origins=["*"],  # restringi in produzione
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Chiave GPT da variabile d’ambiente (Render → Environment → OPENAI_API_KEY)
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Inizializza client OpenAI (nuovo SDK)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # File cache temporanea (vive finché il container è attivo)
 CACHE_FILE = Path("/tmp/cache_gpt.json")
@@ -35,7 +35,7 @@ def load_cache():
         try:
             with open(CACHE_FILE, "r") as f:
                 cache = json.load(f)
-            print(f"🗂️  Cache caricata ({len(cache)} voci).")
+            print(f"🗂️ Cache caricata ({len(cache)} voci).")
         except Exception as e:
             print("⚠️ Errore caricamento cache:", e)
 
@@ -46,6 +46,12 @@ def save_cache():
         print("💾 Cache aggiornata.")
     except Exception as e:
         print("⚠️ Errore salvataggio cache:", e)
+
+def safe_int(value, default):
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 load_cache()
 
@@ -65,15 +71,16 @@ def home():
 # -------------------------------------------------------------
 @app.post("/run")
 async def run(request: Request, authorization: str | None = Header(None)):
-    # 🔐 Controllo token opzionale (aggiungi API_TOKEN in Render Env)
+    # 🔐 Controllo token opzionale
     API_TOKEN = os.environ.get("API_TOKEN")
     if API_TOKEN and authorization != f"Bearer {API_TOKEN}":
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    # 📥 Lettura dati utente
     data = await request.json()
-    giorno = int(data.get("giorno", 1))
-    mese = int(data.get("mese", 1))
-    anno = int(data.get("anno", 2000))
+    giorno = safe_int(data.get("giorno"), 1)
+    mese = safe_int(data.get("mese"), 1)
+    anno = safe_int(data.get("anno"), 2000)
 
     key = f"{giorno}-{mese}-{anno}"
 
@@ -107,9 +114,9 @@ async def run(request: Request, authorization: str | None = Header(None)):
     Scrivi una breve sintesi interpretativa in italiano, tono professionale e positivo.
     """
 
-    # 💬 Chiamata GPT-4o-mini
+    # 💬 Chiamata GPT-4o-mini con nuovo SDK
     try:
-        completion = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Sei un esperto di astrologia che spiega con chiarezza e ispirazione."},
@@ -118,9 +125,10 @@ async def run(request: Request, authorization: str | None = Header(None)):
             temperature=0.7,
             max_tokens=300
         )
-        testo_gpt = completion.choices[0].message["content"]
+        testo_gpt = response.choices[0].message.content
     except Exception as e:
         testo_gpt = f"Errore GPT: {str(e)}"
+        print("⚠️ Errore GPT:", e)
 
     # 💾 Salva in cache
     cache[key] = {
