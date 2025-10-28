@@ -149,8 +149,3 @@ MIT License © 2025 Andrea Lombardi
 
 
 ---
-
-👉 **Ora basta:**
-1️⃣ aggiungi questo file nel repo,  
-2️⃣ fai `git push`,  
-3️⃣ Render lo riconoscerà e rifarà il deploy automatico.  
