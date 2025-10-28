@@ -1,9 +1,10 @@
 fastapi
 uvicorn
 pandas
-openai>=1.0.0
-openpyxl
-pyswisseph
+numpy
+matplotlib
+skyfield
 geopy
-timezonefinder
+timezonefinderL
 pytz
+groq
