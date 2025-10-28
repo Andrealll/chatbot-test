@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Carica i dati
-df_tutti = pd.read_csv("effemeridi_1980_2000.xlsx")
+df_tutti = pd.read_excel("effemeridi_1980_2000.xlsx")
 
 def calcola_pianeti_da_df(
     df_tutti,
