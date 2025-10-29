@@ -1,108 +1,123 @@
-from typing import Dict, Any, Optional, List, Tuple
-import math
-from ai_utils import call_ai_model
+import os
+from typing import Any, Dict, Optional
+from groq import Groq
 
-SEGNI = [
-    "Ariete", "Toro", "Gemelli", "Cancro", "Leone", "Vergine",
-    "Bilancia", "Scorpione", "Sagittario", "Capricorno", "Acquario", "Pesci"
-]
-
-
-# -------------------------
-# Normalizzazione
-# -------------------------
-
-def normalize_longitude(deg: float) -> float:
-    if deg is None:
-        return None
-    x = deg % 360.0
-    if x < 0:
-        x += 360.0
-    return x
+# ======================================================
+# CONFIGURAZIONE BASE
+# ======================================================
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
 
-def deg_to_sign_dms(longitude: float) -> Tuple[str, int, int]:
-    L = normalize_longitude(longitude)
-    segno_idx = int(L // 30)
-    segno = SEGNI[segno_idx]
-    gradi = int(L % 30)
-    primi = int(round((L - math.floor(L)) * 60))
-    if primi == 60:
-        primi = 0
-        gradi = (gradi + 1) % 30
-        if gradi == 0:
-            segno_idx = (segno_idx + 1) % 12
-            segno = SEGNI[segno_idx]
-    return segno, gradi, primi
+# ======================================================
+# COSTRUZIONE PROMPT
+# ======================================================
+def build_prompt(asc: Dict[str, Any], pianeti: Dict[str, Any], meta: Dict[str, Any], domanda_utente: Optional[str] = None):
+    """
+    Crea un prompt chiaro e completo per l'interpretazione astrologica.
+    Invia a Groq i dati più significativi del tema natale in forma testuale leggibile.
+    """
 
-
-# -------------------------
-# Pianeti + Case
-# -------------------------
-
-def pianeti_struct(pianeti_raw: Dict[str, Any], case: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    results = []
-    for name, val in pianeti_raw.items():
-        if val is None:
-            continue
-        L = normalize_longitude(float(val))
-        sign, d, m = deg_to_sign_dms(L)
-        casa = case.get(name) if case else None
-        readable = f"{name} in {sign} {d}°{m:02d}'"
-        if casa:
-            readable += f" in {casa}ª casa"
-        results.append({
-            "name": name,
-            "longitude_deg": round(L, 6),
-            "sign": sign,
-            "deg_in_sign": d,
-            "min_in_sign": m,
-            "house": casa,
-            "readable": readable
-        })
-    return sorted(results, key=lambda x: x["name"])
-
-
-# -------------------------
-# Prompt per Groq / GPT
-# -------------------------
-
-def build_prompt(asc: Dict[str, Any],
-                 planets: List[Dict[str, Any]],
-                 meta: Dict[str, Any],
-                 domanda_utente: Optional[str]) -> List[Dict[str, str]]:
-    asc_str = f"Ascendente: {asc.get('segno', 'N/D')} {asc.get('grado', 0)}°{asc.get('min', 0):02d}'"
-    planets_text = "\n".join([f"- {p['name']}: {p['readable']}" for p in planets])
-
-    system = (
-        "Sei un astrologo esperto e preciso.\n"
-        "Non modificare i dati astronomici, non inventare posizioni.\n"
-        "Rispondi in tono empatico, ma accurato."
+    # --- Ascendente e Medio Cielo ---
+    asc_info = (
+        f"Ascendente in {asc.get('ASC_segno', 'N/A')} "
+        f"a {asc.get('ASC_gradi_segno', 0)}°.\n"
+        f"Medio Cielo in {asc.get('MC_segno', 'N/A')} "
+        f"a {asc.get('MC_gradi_segno', 0)}°.\n"
     )
 
-    base = (
-        f"DATI:\n{asc_str}\n\nPIANETI:\n{planets_text}\n\n"
-        f"Città: {meta.get('citta')} | Data: {meta.get('data')} | Ora: {meta.get('ora')}\n"
+    # --- Pianeti principali nei segni ---
+    pianeti_info = []
+    for nome, valore in pianeti.items():
+        if isinstance(valore, dict) and "segno" in valore:
+            pianeti_info.append(f"- {nome} in {valore['segno']} a {valore['gradi_segno']}°")
+        else:
+            # fallback numerico se non è presente la struttura estesa
+            pianeti_info.append(f"- {nome}: {valore:.2f}°")
+
+    pianeti_text = "\n".join(pianeti_info)
+
+    # --- Metadati per contesto ---
+    meta_info = (
+        f"Città: {meta.get('citta', 'sconosciuta')}\n"
+        f"Data e ora di nascita: {meta.get('data', 'N/A')} {meta.get('ora', 'N/A')}\n"
+        f"Sistema delle case: {meta.get('sistema_case', 'equal')}\n"
+        f"Fuso orario: {meta.get('fuso', 0)}\n"
+    )
+
+    # --- Costruzione prompt finale ---
+    base_prompt = (
+        "Sei un esperto di astrologia moderna e psicologica. "
+        "Offri un'interpretazione sintetica, empatica e professionale del tema natale seguente, "
+        "spiegando il significato dell'Ascendente, del Sole, della Luna e dei principali pianeti personali.\n\n"
+        f"{meta_info}\n"
+        f"{asc_info}\n"
+        f"Pianeti principali:\n{pianeti_text}\n\n"
     )
 
     if domanda_utente:
-        user = f"{base}\nDOMANDA: {domanda_utente}"
-    else:
-        user = f"{base}\nRICHIESTA: Fornisci un'interpretazione sintetica del tema natale."
+        base_prompt += f"Domanda specifica dell'utente: {domanda_utente}\n"
 
     return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user}
+        {"role": "system", "content": "Sei un astrologo esperto e professionale, scrivi in italiano chiaro e accurato."},
+        {"role": "user", "content": base_prompt}
     ]
 
 
-# -------------------------
-# Funzione principale
-# -------------------------
+# ======================================================
+# CHIAMATA AL MODELLO AI (Groq)
+# ======================================================
+def call_ai_model(messages, model=DEFAULT_MODEL, temperature=0.6, max_tokens=700, provider="groq"):
+    """
+    Effettua la chiamata al modello Groq e restituisce la risposta testuale.
+    """
+    try:
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-from typing import Dict, Any, Optional
-from ai_utils import call_ai_model, DEFAULT_MODEL
+        chat = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
+        return chat.choices[0].message.content.strip()
+
+    except Exception as e:
+        print(f"[ERRORE AI] {e}")
+        return f"[Errore AI] {e}"
+
+
+# ======================================================
+# COSTRUZIONE STRUTTURA PIANETI
+# ======================================================
+def pianeti_struct(pianeti_raw: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
+    """
+    Converte i gradi eclittici in segni zodiacali e gradi all'interno del segno.
+    Esempio: 116.2° → Cancro 26.2°
+    """
+    segni = [
+        "Ariete", "Toro", "Gemelli", "Cancro",
+        "Leone", "Vergine", "Bilancia", "Scorpione",
+        "Sagittario", "Capricorno", "Acquario", "Pesci"
+    ]
+
+    pianeti_conv = {}
+    for nome, valore in pianeti_raw.items():
+        segno_idx = int(valore // 30)
+        gradi_segno = round(valore % 30, 2)
+        segno_nome = segni[segno_idx]
+        pianeti_conv[nome] = {
+            "gradi_eclittici": round(valore, 2),
+            "segno": segno_nome,
+            "gradi_segno": gradi_segno
+        }
+
+    return pianeti_conv
+
+
+# ======================================================
+# FUNZIONE PRINCIPALE DI INTERPRETAZIONE
+# ======================================================
 def interpreta_groq(
     asc: Dict[str, Any],
     pianeti_raw: Dict[str, float],
@@ -114,16 +129,14 @@ def interpreta_groq(
     max_tokens: int = 800
 ) -> str:
     """
-    Genera l'interpretazione astrologica usando Groq e il modello configurato.
+    Genera l'interpretazione del tema natale combinando dati astrologici e AI.
     """
     try:
-        # Conversione pianeti in struttura leggibile
-        planets = pianeti_struct(pianeti_raw)
-        # Costruzione del prompt con contesto
-        messages = build_prompt(asc, planets, meta, domanda_utente)
-        # Chiamata al modello AI
+        # Prepara struttura leggibile dei pianeti
+        pianeti = pianeti_struct(pianeti_raw)
+        messages = build_prompt(asc, pianeti, meta, domanda_utente)
         risposta = call_ai_model(
-            messages=messages,
+            messages,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -131,4 +144,5 @@ def interpreta_groq(
         )
         return risposta
     except Exception as e:
+        print(f"[Errore interprete] {e}")
         return f"[Errore AI] {e}"
