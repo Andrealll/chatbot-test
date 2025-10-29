@@ -9,9 +9,9 @@ from calcoli import (
     genera_carta_base64,
     df_tutti
 )
-from metodi import interpreta_groq  # nuova funzione con passaggio dati robusto
+from metodi import interpreta_groq
 
-app = FastAPI(title="AstroBot v7", version="7.0")
+app = FastAPI(title="AstroBot v9", version="9.0")
 
 # -------------------------------------------------
 # CORS
@@ -26,7 +26,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "AstroBot v7 online 🪐"}
+    return {"status": "ok", "message": "AstroBot v9 online 🪐"}
 
 
 # -------------------------------------------------
@@ -35,23 +35,15 @@ def root():
 @app.post("/tema")
 async def tema(request: Request):
     """
-    Body JSON accettato:
-    Nuovo formato:
+    Endpoint principale per il calcolo del tema natale e interpretazione.
+    Accetta JSON:
     {
       "data": "1986-07-19",
       "ora": "14:30",
       "citta": "Napoli",
-      "fuso": 1.0,               # opzionale
-      "sistema_case": "equal",   # opzionale
-      "domanda_utente": "..."    # opzionale
-    }
-
-    Legacy compatibile:
-    {
-      "giorno": 19, "mese": 7, "anno": 1986,
-      "ora": 14, "minuti": 30,
-      "citta": "Napoli",
-      "domanda_utente": "..."    # opzionale
+      "fuso": 1.0,
+      "sistema_case": "equal",
+      "domanda_utente": "Cosa significa il mio ascendente in Leone?"
     }
     """
     start = time.time()
@@ -59,6 +51,7 @@ async def tema(request: Request):
     try:
         body = await request.json()
 
+        # Campi principali
         citta = body.get("citta")
         if not citta:
             raise HTTPException(status_code=422, detail="Campo 'citta' obbligatorio.")
@@ -67,11 +60,10 @@ async def tema(request: Request):
         sistema_case = body.get("sistema_case", "equal")
         domanda_utente = body.get("domanda_utente")
 
-        # Nuovo formato
         data = body.get("data")
         ora_str = body.get("ora")
 
-        # Legacy
+        # Legacy fallback
         giorno = body.get("giorno")
         mese = body.get("mese")
         anno = body.get("anno")
@@ -83,25 +75,18 @@ async def tema(request: Request):
                 giorno, mese, anno = dt.day, dt.month, dt.year
                 ora_i, minuti = dt.hour, dt.minute
             except ValueError:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Formato data/ora non valido. Usa YYYY-MM-DD e HH:MM."
-                )
+                raise HTTPException(status_code=422, detail="Formato data/ora non valido.")
         else:
-            # Legacy
             ora_i = body.get("ora")
             if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Parametri insufficienti: fornisci data/ora oppure giorno/mese/anno/ora/minuti."
-                )
+                raise HTTPException(status_code=422, detail="Parametri insufficienti.")
 
-        # --- Calcoli base ---
+        # --- Calcoli astrologici ---
         asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
         pianeti_raw, _ = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
         img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
 
-        # --- Interpretazione robusta (nuova) ---
+        # --- Interpretazione AI ---
         interpretazione = interpreta_groq(
             asc=asc,
             pianeti_raw=pianeti_raw,
@@ -129,5 +114,4 @@ async def tema(request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        # Log minimale nel payload per debug (in prod meglio loggare server-side)
         return {"status": "error", "message": str(e)}
