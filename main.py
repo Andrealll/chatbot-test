@@ -1,4 +1,4 @@
-# main.py — AstroBot v10
+# main.py — AstroBot v11
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
@@ -11,10 +11,13 @@ from calcoli import (
     df_tutti
 )
 from metodi import interpreta_groq
-from rag_utils import get_relevant_chunks  # 🔹 nuovo import
+from rag_utils import get_relevant_chunks  # 🔹 Knowledge base AI fallback
 
-app = FastAPI(title="AstroBot v10", version="10.0")
+app = FastAPI(title="AstroBot v11", version="11.0")
 
+# ======================================================
+# MIDDLEWARE CORS
+# ======================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,11 +27,17 @@ app.add_middleware(
 )
 
 
+# ======================================================
+# ROOT ENDPOINT
+# ======================================================
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "AstroBot v10 online 🪐"}
+    return {"status": "ok", "message": "AstroBot v11 online 🪐"}
 
 
+# ======================================================
+# ENDPOINT PRINCIPALE: /tema
+# ======================================================
 @app.post("/tema")
 async def tema(request: Request):
     """
@@ -38,7 +47,7 @@ async def tema(request: Request):
     try:
         body = await request.json()
 
-        # Parametri
+        # --- Parametri principali ---
         citta = body.get("citta")
         if not citta:
             raise HTTPException(status_code=422, detail="Campo 'citta' obbligatorio.")
@@ -54,6 +63,7 @@ async def tema(request: Request):
         anno = body.get("anno")
         minuti = body.get("minuti")
 
+        # --- Parsing data/ora ---
         if data and ora_str:
             dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
             giorno, mese, anno = dt.day, dt.month, dt.year
@@ -64,32 +74,55 @@ async def tema(request: Request):
                 raise HTTPException(status_code=422, detail="Parametri insufficienti.")
 
         # --- Calcoli astrologici ---
+        print(f"[AstroBot] Calcolo tema {giorno:02d}/{mese:02d}/{anno} {ora_i:02d}:{minuti:02d} per {citta}")
         asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
-        pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
+        pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora_i, minuti)
         img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
+
+        print(f"[AstroBot] ASC = {asc['ASC_segno']} {asc['ASC_gradi_segno']}°, MC = {asc['MC_segno']} {asc['MC_gradi_segno']}°")
+        print(f"[AstroBot] Pianeti: {', '.join(pianeti_raw.keys())}")
 
         # --- Recupero Knowledge Base (se domanda presente) ---
         context_from_kb = ""
         if domanda_utente:
             kb_matches = get_relevant_chunks(domanda_utente)
             context_from_kb = "\n".join([f"- {m[0]} (sim={m[1]:.2f})" for m in kb_matches])
+            print(f"[AstroBot] KB context: {len(kb_matches)} matches")
 
         # --- Interpretazione AI (Groq) ---
-        interpretazione = interpreta_groq(
-            asc=asc,
-            pianeti_raw=pianeti_raw,
-            meta={
-                "citta": citta,
-                "data": f"{anno:04d}-{mese:02d}-{giorno:02d}",
-                "ora": f"{ora_i:02d}:{minuti:02d}",
-                "sistema_case": sistema_case,
-                "fuso": fuso,
-                "context_kb": context_from_kb   # 🔹 contesto knowledge base
-            },
-            domanda_utente=domanda_utente
-        )
+        interpretazione = None
+        try:
+            interpretazione = interpreta_groq(
+                asc=asc,
+                pianeti_raw=pianeti_raw,
+                meta={
+                    "citta": citta,
+                    "data": f"{anno:04d}-{mese:02d}-{giorno:02d}",
+                    "ora": f"{ora_i:02d}:{minuti:02d}",
+                    "sistema_case": sistema_case,
+                    "fuso": fuso,
+                    "context_kb": context_from_kb
+                },
+                domanda_utente=domanda_utente
+            )
+        except Exception as e:
+            print(f"[ERRORE AI] {e}")
+            interpretazione = None
 
+        # --- Fallback automatico se l'AI non risponde ---
+        if not interpretazione or "[Errore AI]" in str(interpretazione):
+            interpretazione = (
+                "🪐 Non è stato possibile ottenere l'interpretazione AI in questo momento. "
+                "Tuttavia, il calcolo astrologico è corretto.\n"
+                f"Ascendente: {asc['ASC_segno']} {asc['ASC_gradi_segno']}° — "
+                f"Sole: {pianeti_raw.get('Sole', 0):.2f}°\n"
+                "Riprova tra qualche minuto."
+            )
+
+        # --- Risposta finale ---
         elapsed = int((time.time() - start) * 1000)
+        print(f"[AstroBot] Tempo totale: {elapsed} ms")
+
         return {
             "status": "ok",
             "ascendente": asc,
@@ -103,4 +136,5 @@ async def tema(request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
+        print(f"[AstroBot] Errore generale: {e}")
         return {"status": "error", "message": str(e)}
