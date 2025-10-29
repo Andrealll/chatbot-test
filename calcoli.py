@@ -1,216 +1,201 @@
-# =============================================================
-# 🔮 CALCOLI ASTROLOGICI COMPLETI — Skyfield + Effemeridi + Groq
-# =============================================================
+# metodi.py
+from typing import Dict, Any, Optional, List, Tuple
+import math
 
-import numpy as np
-import pandas as pd
-from math import radians, degrees, atan2, asin
-from skyfield.api import load
-from geopy.geocoders import Nominatim
-from timezonefinderL import TimezoneFinder
-from datetime import datetime
-import pytz
-import matplotlib.pyplot as plt
-import io, base64, os
-from groq import Groq
+# =========================
+# Utilità di formattazione
+# =========================
 
-# =============================================================
-# ♈ Costanti segni
-# =============================================================
 SEGNI = [
-    "♈ Ariete", "♉ Toro", "♊ Gemelli", "♋ Cancro",
-    "♌ Leone", "♍ Vergine", "♎ Bilancia", "♏ Scorpione",
-    "♐ Sagittario", "♑ Capricorno", "♒ Acquario", "♓ Pesci"
+    "Ariete", "Toro", "Gemelli", "Cancro", "Leone", "Vergine",
+    "Bilancia", "Scorpione", "Sagittario", "Capricorno", "Acquario", "Pesci"
 ]
 
-def _deg_to_sign(deg):
-    segno_index = int(deg // 30) % 12
-    segno = SEGNI[segno_index]
-    gradi_segno = round(deg % 30, 2)
-    return segno, gradi_segno
+def normalize_longitude(deg: float) -> float:
+    """
+    Porta la longitudine in gradi nell'intervallo [0, 360).
+    Gestisce negativi o >360.
+    """
+    if deg is None:
+        return None
+    x = deg % 360.0
+    if x < 0:
+        x += 360.0
+    return x
 
-def _obliquita_laskar_rad(t):
-    T = (t.tt - 2451545.0) / 36525.0
-    eps0 = (84381.406 -
-            46.836769 * T -
-            0.0001831 * T**2 +
-            0.00200340 * T**3 -
-            0.000000576 * T**4 -
-            0.0000000434 * T**5)
-    return np.deg2rad(eps0 / 3600.0)
+def deg_to_sign_dms(longitude: float) -> Tuple[str, int, int]:
+    """
+    Converte una longitudine eclittica (0..360) in:
+    - segno zodiacale (nome)
+    - gradi nel segno (0..29)
+    - primi nel segno (0..59)
+    """
+    L = normalize_longitude(longitude)
+    segno_idx = int(L // 30)
+    segno = SEGNI[segno_idx]
+    gradi = int(L % 30)
+    primi = int(round((L - math.floor(L)) * 60))
+    if primi == 60:  # normalizza eventuale round-up
+        primi = 0
+        gradi = (gradi + 1) % 30
+        if gradi == 0:
+            segno_idx = (segno_idx + 1) % 12
+            segno = SEGNI[segno_idx]
+    return segno, gradi, primi
 
-# =============================================================
-# 🌍 GEOLOCALIZZAZIONE
-# =============================================================
-def geocodifica_citta_con_fuso(citta: str, anno:int, mese:int, giorno:int, ora:int, minuti:int):
-    geolocator = Nominatim(user_agent="astrobot")
-    location = geolocator.geocode(citta)
-    if not location:
-        raise ValueError(f"Città non trovata: {citta}")
-    lat, lon = location.latitude, location.longitude
-    tf = TimezoneFinder()
-    timezone_str = tf.timezone_at(lat=lat, lng=lon) or "UTC"
-    tz = pytz.timezone(timezone_str)
-    local_dt = tz.localize(datetime(anno, mese, giorno, ora, minuti), is_dst=None)
-    offset_hours = local_dt.utcoffset().total_seconds() / 3600.0
-    return {"lat": lat, "lon": lon, "fuso_orario": offset_hours, "timezone": timezone_str}
+def pianeti_struct(pianeti_raw: Dict[str, float]) -> List[Dict[str, Any]]:
+    """
+    Converte il dict {nome: longitudine_float} in una lista di oggetti
+    con campi disambiguati:
+      - name: "Sole"
+      - longitude_deg: 123.456 (0..360)
+      - sign: "Leone"
+      - deg_in_sign: 3
+      - min_in_sign: 27
+      - readable: "Sole in Leone 3°27'"
+    """
+    results = []
+    for name, val in pianeti_raw.items():
+        if val is None:
+            continue
+        L = normalize_longitude(float(val))
+        sign, d, m = deg_to_sign_dms(L)
+        readable = f"{name} in {sign} {d}°{m:02d}'"
+        results.append({
+            "name": name,
+            "longitude_deg": round(L, 6),
+            "sign": sign,
+            "deg_in_sign": d,
+            "min_in_sign": m,
+            "readable": readable
+        })
+    # Ordina per ordine tradizionale o per longitudine (qui per nome)
+    results.sort(key=lambda x: x["name"])
+    return results
 
-# =============================================================
-# 🌞 ASCENDENTE + MC + CASE
-# =============================================================
-def calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti, sistema_case='equal'):
-    info = geocodifica_citta_con_fuso(citta, anno, mese, giorno, ora, minuti)
-    lat_deg, lon_deg, fuso = info["lat"], info["lon"], info["fuso_orario"]
-    ts = load.timescale()
-    t = ts.utc(anno, mese, giorno, ora - fuso, minuti)
-    eps = _obliquita_laskar_rad(t)
-    phi = np.radians(lat_deg)
-    lst_hours = t.gmst + (lon_deg / 15.0)
-    LST = np.radians((lst_hours % 24.0) * 15.0)
+def asc_readable(asc: Dict[str, Any]) -> str:
+    """
+    Atteso qualcosa tipo {"segno": "Leone", "grado": 12, "min": 34, ...}
+    Adatta se il tuo ascendente ha struttura diversa.
+    """
+    # Fallback generico:
+    segno = asc.get("segno") or asc.get("sign") or "N/D"
+    grado = asc.get("grado") or asc.get("deg") or asc.get("degree") or 0
+    minuti = asc.get("min") or asc.get("minutes") or 0
+    return f"Ascendente {segno} {int(grado)}°{int(minuti):02d}'"
 
-    def ra_dec_from_lambda(lmbda):
-        sL, cL = np.sin(lmbda), np.cos(lmbda)
-        sin_eps, cos_eps = np.sin(eps), np.cos(eps)
-        alpha = atan2(sL * cos_eps, cL)
-        delta = asin(sL * sin_eps)
-        return alpha % (2*np.pi), delta
+# =========================
+# Prompting per Groq
+# =========================
 
-    def altitude(lambda_rad):
-        alpha, delta = ra_dec_from_lambda(lambda_rad)
-        H = (LST - alpha + 2*np.pi) % (2*np.pi)
-        return np.arcsin(np.sin(phi)*np.sin(delta) + np.cos(phi)*np.cos(delta)*np.cos(H))
-
-    def azimuth(lambda_rad):
-        alpha, delta = ra_dec_from_lambda(lambda_rad)
-        H = (LST - alpha + 2*np.pi) % (2*np.pi)
-        h = altitude(lambda_rad)
-        num = -np.sin(H)
-        den = (np.tan(delta)*np.cos(phi) - np.sin(phi)*np.cos(H))
-        A = np.arctan2(num, den) % (2*np.pi)
-        return A, h
-
-    lambdas = np.linspace(0, 2*np.pi, 721)
-    best_lambda, best_score = None, 1e9
-    for lam in lambdas:
-        A, h = azimuth(lam)
-        score = abs(h) + 0.5*abs((A - np.pi/2 + np.pi) % (2*np.pi) - np.pi)
-        if score < best_score:
-            best_score, best_lambda = score, lam
-    fine = np.linspace(best_lambda - np.deg2rad(2), best_lambda + np.deg2rad(2), 401)
-    for lam in fine:
-        A, h = azimuth(lam)
-        score = abs(h) + 0.5*abs((A - np.pi/2 + np.pi) % (2*np.pi) - np.pi)
-        if score < best_score:
-            best_score, best_lambda = score, lam
-
-    asc_deg = float((degrees(best_lambda)) % 360.0)
-    segno_asc, gradi_asc = _deg_to_sign(asc_deg)
-    y_mc = np.sin(LST)
-    x_mc = np.cos(LST) * np.cos(eps)
-    mc_deg = float(np.degrees(np.arctan2(y_mc, x_mc)) % 360.0)
-    segno_mc, gradi_mc = _deg_to_sign(mc_deg)
-    case = [(asc_deg + i*30) % 360 for i in range(12)]
-
-    return {
-        "citta": citta,
-        "lat": round(lat_deg, 4),
-        "lon": round(lon_deg, 4),
-        "timezone": info["timezone"],
-        "fuso_orario": round(fuso, 2),
-        "ASC": round(asc_deg, 2), "ASC_segno": segno_asc, "ASC_gradi_segno": gradi_asc,
-        "MC": round(mc_deg, 2), "MC_segno": segno_mc, "MC_gradi_segno": gradi_mc,
-        "case": [round(c,2) for c in case],
-        "sistema_case": sistema_case
-    }
-
-# =============================================================
-# 🪐 PIANETI DA FILE EXCEL
-# =============================================================
-df_tutti = pd.read_excel("effemeridi_1950_2025.xlsx")
-
-def calcola_pianeti_da_df(df_tutti, giorno, mese, anno, colonne_extra=('Nodo','Lilith')):
-    r = df_tutti[(df_tutti['Giorno']==giorno)&(df_tutti['Mese']==mese)&(df_tutti['Anno']==anno)]
-    if r.empty:
-        raise ValueError("Data non presente in effemeridi.")
-    row = r.iloc[0]
-    exclude = {'Giorno','Mese','Anno'}
-    valori_raw = {}; valori_norm = {}
-    for col in df_tutti.columns:
-        if col in exclude: continue
-        try:
-            v_raw = float(row[col])
-        except: continue
-        valori_raw[col] = v_raw
-        valori_norm[col] = abs(v_raw)
-    ordine = ['Sole','Luna','Mercurio','Venere','Marte','Giove','Saturno','Urano','Nettuno','Plutone']
-    for extra in colonne_extra:
-        if extra in valori_raw and extra not in ordine:
-            ordine.append(extra)
-    for c in valori_raw.keys():
-        if c not in ordine:
-            ordine.append(c)
-    valori_raw = {k: valori_raw[k] for k in ordine if k in valori_raw}
-    valori_norm = {k: valori_norm[k] for k in ordine if k in valori_norm}
-    return valori_raw, valori_norm
-
-# =============================================================
-# 🎨 CARTA POLARE
-# =============================================================
-def genera_carta_base64(anno, mese, giorno, ora, minuti, citta):
-    info = geocodifica_citta_con_fuso(citta, anno, mese, giorno, ora, minuti)
-    lat, lon, fuso = info["lat"], info["lon"], info["fuso_orario"]
-    res = calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti)
-    valori_raw, valori_norm = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
-
-    plt.figure(figsize=(10,10))
-    ax = plt.subplot(111, polar=True)
-    for deg in range(0, 360, 30):
-        th = np.deg2rad(deg)
-        ax.plot([th, th], [0, 1.15], linestyle='--', linewidth=1)
-        ax.text(th, 1.17, SEGNI[deg//30].split()[1], ha='center', va='center')
-
-    # Pianeti
-    for nome, gradi in valori_norm.items():
-        th = np.deg2rad(gradi)
-        ax.scatter(th, 1, s=220, edgecolors='k', zorder=3)
-        ax.text(th, 1.07, nome, ha='center', va='center', fontsize=10, fontweight='bold')
-
-    # ASC / MC
-    asc = res["ASC"]; mc = res["MC"]
-    ax.plot([np.deg2rad(asc), np.deg2rad(asc)], [0, 1.25], color='red', linewidth=3)
-    ax.text(np.deg2rad(asc), 1.27, f"Asc {res['ASC_segno']}", color='red', fontweight='bold')
-    ax.plot([np.deg2rad(mc), np.deg2rad(mc)], [0, 1.25], color='blue', linewidth=3)
-    ax.text(np.deg2rad(mc), 1.27, f"MC {res['MC_segno']}", color='blue', fontweight='bold')
-
-    ax.set_theta_zero_location('N'); ax.set_theta_direction(-1)
-    ax.set_yticks([]); ax.set_xticks([]); ax.spines['polar'].set_visible(False)
-    plt.title(f"Carta natale — {citta} {giorno:02d}/{mese:02d}/{anno}\nAsc: {res['ASC_segno']}  MC: {res['MC_segno']}")
-    buf = io.BytesIO(); plt.savefig(buf, format="png", dpi=150); plt.close()
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("utf-8")
-
-# =============================================================
-# 🤖 INTERPRETAZIONE GROQ
-# =============================================================
-def interpreta_groq(dati, pianeti):
-    descr = "\n".join([f"{k}: {v}°" for k,v in pianeti.items()])
-    prompt = f"""
-Sei un astrologo esperto. Interpreta in italiano questo tema natale.
-
-Ascendente: {dati['ASC_segno']} ({dati['ASC_gradi_segno']}°)
-Medio Cielo: {dati['MC_segno']} ({dati['MC_gradi_segno']}°)
-Pianeti:
-{descr}
-
-Fornisci una sintesi di 6-8 righe, chiara e professionale.
-"""
-    try:
-        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        chat = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.6, max_tokens=600
+def build_prompt(asc: Dict[str, Any],
+                 planets: List[Dict[str, Any]],
+                 meta: Dict[str, Any],
+                 domanda_utente: Optional[str]) -> Dict[str, Any]:
+    """
+    Costruisce messaggi per chat-completions (role-based).
+    Usa un system forte per impedire al modello di alterare i dati astronomici.
+    """
+    asc_str = asc_readable(asc)
+    # Impacchetta un JSON dei pianeti molto esplicito
+    planets_json_lines = []
+    for p in planets:
+        planets_json_lines.append(
+            f'- {p["name"]}: {p["longitude_deg"]}° ({p["readable"]})'
         )
-        return chat.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Errore Groq: {e}"
+    planets_block = "\n".join(planets_json_lines)
+
+    meta_lines = [
+        f"Data: {meta.get('data', 'N/D')}",
+        f"Ora: {meta.get('ora', 'N/D')}",
+        f"Città: {meta.get('citta', 'N/D')}",
+        f"Sistema case: {meta.get('sistema_case', 'equal')}",
+        f"Fuso: {meta.get('fuso', 0.0)}"
+    ]
+    meta_block = "\n".join(meta_lines)
+
+    system_content = (
+        "Sei un astrologo professionista. Ti vengono forniti dati astronomici già calcolati.\n"
+        "REGOLE VINCOLANTI:\n"
+        "1) NON modificare, inferire o indovinare posizioni. Usa SOLO i dati forniti.\n"
+        "2) NON convertire i gradi: considera 'longitude_deg' come longitudine eclittica 0–360 già normalizzata.\n"
+        "3) Quando citi una posizione, riporta il NOME del pianeta e la forma leggibile (es. 'Sole in Leone 3°27'').\n"
+        "4) Se la domanda chiede posizioni non fornite, rispondi che non sono disponibili.\n"
+        "5) Stile: chiaro, sintetico, benevolo, ma tecnico quando serve.\n"
+    )
+
+    user_base = (
+        f"DATI TEMA:\n"
+        f"- {asc_str}\n"
+        f"- Pianeti:\n{planets_block}\n\n"
+        f"METADATI:\n{meta_block}\n"
+    )
+
+    if domanda_utente and str(domanda_utente).strip():
+        user_content = (
+            user_base
+            + "DOMANDA UTENTE:\n"
+            + str(domanda_utente).strip()
+        )
+    else:
+        user_content = (
+            user_base
+            + "RICHIESTA:\n"
+            + "Fornisci un'interpretazione sintetica e coerente del tema, "
+              "citando i pianeti con il loro NOME e la loro posizione leggibile."
+        )
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
+    ]
+    return {"messages": messages}
+
+# =========================
+# Chiamata al modello (adatta al tuo client)
+# =========================
+
+def call_groq_chat(messages: List[Dict[str, str]],
+                   model: str = "mixtral-8x7b",
+                   temperature: float = 0.3,
+                   max_tokens: int = 800) -> str:
+    """
+    Sostituisci questo stub con la tua integrazione Groq reale.
+    Esempio se usi SDK ufficiale:
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content
+    """
+    # Placeholder per evitare rotture in fase di test
+    # In produzione, implementa la chiamata reale come nel commento sopra.
+    return "(Stub) Integra qui la chiamata a Groq e restituisci il contenuto."
+
+# =========================
+# API pubblica per main.py
+# =========================
+
+def interpreta_groq(asc: Dict[str, Any],
+                    pianeti_raw: Dict[str, float],
+                    meta: Dict[str, Any],
+                    domanda_utente: Optional[str] = None,
+                    model: str = "mixtral-8x7b",
+                    temperature: float = 0.3,
+                    max_tokens: int = 800) -> str:
+    """
+    - Normalizza i dati planetari
+    - Costruisce prompt robusto e disambiguato (nome pianeta + posizione leggibile)
+    - Chiama Groq (sostituisci lo stub con la tua integrazione)
+    """
+    planets = pianeti_struct(pianeti_raw)
+    payload = build_prompt(asc=asc, planets=planets, meta=meta, domanda_utente=domanda_utente)
+    messages = payload["messages"]
+
+    # CHIAMATA REALE: sostituisci lo stub qui sotto con il tuo client Groq
+    text = call_groq_chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
+    return text
