@@ -17,6 +17,22 @@ PLANETI_BASE = [
 PLANETI_EXTRA = ["Nodo", "Lilith"]
 
 # ======================================================
+# CARICAMENTO EFFEMERIDI (1975–2025)
+# ======================================================
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1975_2025.xlsx")
+
+    # Carica il file Excel in un DataFrame
+    df_tutti = pd.read_excel(EFF_PATH)
+
+except Exception as e:
+    print(f"[ATTENZIONE] Errore nel caricamento delle effemeridi: {e}")
+    df_tutti = None
+
+
+
+# ======================================================
 # DATI EPHEMERIDI
 # ======================================================
 ts = load.timescale()
