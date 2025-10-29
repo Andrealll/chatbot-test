@@ -100,21 +100,33 @@ def build_prompt(asc: Dict[str, Any],
 # Funzione principale
 # -------------------------
 
-def interpreta_groq(asc: Dict[str, Any],
-                    pianeti_raw: Dict[str, float],
-                    meta: Dict[str, Any],
-                    domanda_utente: Optional[str] = None,
-                    model: str = "mixtral-8x7b",
-                    provider: str = "groq",
-                    temperature: float = 0.3,
-                    max_tokens: int = 800) -> str:
-    planets = pianeti_struct(pianeti_raw)
-    messages = build_prompt(asc, planets, meta, domanda_utente)
-    risposta = call_ai_model(
-        messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        provider=provider
-    )
-    return risposta
+
+def interpreta_groq(
+    asc: Dict[str, Any],
+    pianeti_raw: Dict[str, float],
+    meta: Dict[str, Any],
+    domanda_utente: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+    provider: str = "groq",
+    temperature: float = 0.6,
+    max_tokens: int = 800
+) -> str:
+    """
+    Genera l'interpretazione astrologica usando Groq e il modello configurato.
+    """
+    try:
+        # Conversione pianeti in struttura leggibile
+        planets = pianeti_struct(pianeti_raw)
+        # Costruzione del prompt con contesto
+        messages = build_prompt(asc, planets, meta, domanda_utente)
+        # Chiamata al modello AI
+        risposta = call_ai_model(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider=provider
+        )
+        return risposta
+    except Exception as e:
+        return f"[Errore AI] {e}"
