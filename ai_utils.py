@@ -8,7 +8,7 @@ from groq import Groq
 # ======================================================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or "INSERISCI-LA-TUA-CHIAVE"
-DEFAULT_MODEL = os.getenv("AI_MODEL", "mixtral-8x7b")
+DEFAULT_MODEL = os.getenv("AI_MODEL", "mixtral-8x7b-32768")
 DEFAULT_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.3"))
 DEFAULT_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "1000"))
 DEFAULT_PROVIDER = "groq"
