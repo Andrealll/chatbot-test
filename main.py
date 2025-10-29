@@ -65,7 +65,7 @@ async def tema(request: Request):
 
         # --- Calcoli astrologici ---
         asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
-        pianeti_raw, _ = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
+        pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
         img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
 
         # --- Recupero Knowledge Base (se domanda presente) ---
