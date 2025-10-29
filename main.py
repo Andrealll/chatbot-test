@@ -1,3 +1,4 @@
+# main.py — AstroBot v10
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
@@ -10,12 +11,10 @@ from calcoli import (
     df_tutti
 )
 from metodi import interpreta_groq
+from rag_utils import get_relevant_chunks  # 🔹 nuovo import
 
-app = FastAPI(title="AstroBot v9", version="9.0")
+app = FastAPI(title="AstroBot v10", version="10.0")
 
-# -------------------------------------------------
-# CORS
-# -------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,34 +23,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "AstroBot v9 online 🪐"}
+    return {"status": "ok", "message": "AstroBot v10 online 🪐"}
 
 
-# -------------------------------------------------
-# POST /tema
-# -------------------------------------------------
 @app.post("/tema")
 async def tema(request: Request):
     """
-    Endpoint principale per il calcolo del tema natale e interpretazione.
-    Accetta JSON:
-    {
-      "data": "1986-07-19",
-      "ora": "14:30",
-      "citta": "Napoli",
-      "fuso": 1.0,
-      "sistema_case": "equal",
-      "domanda_utente": "Cosa significa il mio ascendente in Leone?"
-    }
+    Endpoint principale per il calcolo del tema natale e interpretazione AI.
     """
     start = time.time()
-
     try:
         body = await request.json()
 
-        # Campi principali
+        # Parametri
         citta = body.get("citta")
         if not citta:
             raise HTTPException(status_code=422, detail="Campo 'citta' obbligatorio.")
@@ -62,20 +49,15 @@ async def tema(request: Request):
 
         data = body.get("data")
         ora_str = body.get("ora")
-
-        # Legacy fallback
         giorno = body.get("giorno")
         mese = body.get("mese")
         anno = body.get("anno")
         minuti = body.get("minuti")
 
         if data and ora_str:
-            try:
-                dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
-                giorno, mese, anno = dt.day, dt.month, dt.year
-                ora_i, minuti = dt.hour, dt.minute
-            except ValueError:
-                raise HTTPException(status_code=422, detail="Formato data/ora non valido.")
+            dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
+            giorno, mese, anno = dt.day, dt.month, dt.year
+            ora_i, minuti = dt.hour, dt.minute
         else:
             ora_i = body.get("ora")
             if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
@@ -86,7 +68,13 @@ async def tema(request: Request):
         pianeti_raw, _ = calcola_pianeti_da_df(df_tutti, giorno, mese, anno)
         img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
 
-        # --- Interpretazione AI ---
+        # --- Recupero Knowledge Base (se domanda presente) ---
+        context_from_kb = ""
+        if domanda_utente:
+            kb_matches = get_relevant_chunks(domanda_utente)
+            context_from_kb = "\n".join([f"- {m[0]} (sim={m[1]:.2f})" for m in kb_matches])
+
+        # --- Interpretazione AI (Groq) ---
         interpretazione = interpreta_groq(
             asc=asc,
             pianeti_raw=pianeti_raw,
@@ -95,7 +83,8 @@ async def tema(request: Request):
                 "data": f"{anno:04d}-{mese:02d}-{giorno:02d}",
                 "ora": f"{ora_i:02d}:{minuti:02d}",
                 "sistema_case": sistema_case,
-                "fuso": fuso
+                "fuso": fuso,
+                "context_kb": context_from_kb   # 🔹 contesto knowledge base
             },
             domanda_utente=domanda_utente
         )
@@ -106,7 +95,7 @@ async def tema(request: Request):
             "ascendente": asc,
             "pianeti": pianeti_raw,
             "interpretazione": interpretazione,
-            "domanda_ricevuta": domanda_utente,
+            "context_kb": context_from_kb,
             "image_base64": img_b64,
             "elapsed_ms": elapsed
         }
