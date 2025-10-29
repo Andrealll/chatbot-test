@@ -65,13 +65,18 @@ async def tema(request: Request):
 
         # --- Parsing data/ora ---
         if data and ora_str:
-            dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
-            giorno, mese, anno = dt.day, dt.month, dt.year
-            ora_i, minuti = dt.hour, dt.minute
-        else:
-            ora_i = body.get("ora")
-            if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
-                raise HTTPException(status_code=422, detail="Parametri insufficienti.")
+            try:
+                # formato ISO standard (YYYY-MM-DD)
+                dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                # fallback formato europeo (DD/MM/YYYY)
+                dt = datetime.strptime(f"{data} {ora_str}", "%d/%m/%Y %H:%M")
+                    giorno, mese, anno = dt.day, dt.month, dt.year
+                    ora_i, minuti = dt.hour, dt.minute
+                else:
+                    ora_i = body.get("ora")
+                    if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
+                        raise HTTPException(status_code=422, detail="Parametri insufficienti.")
 
         # --- Calcoli astrologici ---
         print(f"[AstroBot] Calcolo tema {giorno:02d}/{mese:02d}/{anno} {ora_i:02d}:{minuti:02d} per {citta}")
