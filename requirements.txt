@@ -5,7 +5,7 @@ numpy
 matplotlib
 skyfield
 geopy
-timezonefinderL
+timezonefinder
 pytz
 groq
 openpyxl
