@@ -100,6 +100,8 @@ def build_prompt(asc: Dict[str, Any],
 # Funzione principale
 # -------------------------
 
+from typing import Dict, Any, Optional
+from ai_utils import call_ai_model, DEFAULT_MODEL
 
 def interpreta_groq(
     asc: Dict[str, Any],
