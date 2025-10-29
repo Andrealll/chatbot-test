@@ -1,40 +1,3 @@
-# main.py — AstroBot v11
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
-import time
-
-from calcoli import (
-    calcola_asc_mc_case,
-    calcola_pianeti_da_df,
-    genera_carta_base64,
-    df_tutti
-)
-from metodi import interpreta_groq
-from rag_utils import get_relevant_chunks  # 🔹 Knowledge base AI fallback
-
-app = FastAPI(title="AstroBot v11", version="11.0")
-
-# ======================================================
-# MIDDLEWARE CORS
-# ======================================================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ======================================================
-# ROOT ENDPOINT
-# ======================================================
-@app.get("/")
-def root():
-    return {"status": "ok", "message": "AstroBot v11 online 🪐"}
-
-
 # ======================================================
 # ENDPOINT PRINCIPALE: /tema
 # ======================================================
@@ -42,6 +5,7 @@ def root():
 async def tema(request: Request):
     """
     Endpoint principale per il calcolo del tema natale e interpretazione AI.
+    Supporta date nei formati YYYY-MM-DD e DD/MM/YYYY.
     """
     start = time.time()
     try:
@@ -63,20 +27,26 @@ async def tema(request: Request):
         anno = body.get("anno")
         minuti = body.get("minuti")
 
-        # --- Parsing data/ora ---
+        # --- Parsing data/ora con doppio formato ---
         if data and ora_str:
-            try:
-                # formato ISO standard (YYYY-MM-DD)
-                dt = datetime.strptime(f"{data} {ora_str}", "%Y-%m-%d %H:%M")
-            except ValueError:
-                # fallback formato europeo (DD/MM/YYYY)
-                dt = datetime.strptime(f"{data} {ora_str}", "%d/%m/%Y %H:%M")
-                    giorno, mese, anno = dt.day, dt.month, dt.year
-                    ora_i, minuti = dt.hour, dt.minute
-                else:
-                    ora_i = body.get("ora")
-                    if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
-                        raise HTTPException(status_code=422, detail="Parametri insufficienti.")
+            dt = None
+            for fmt in ("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M"):
+                try:
+                    dt = datetime.strptime(f"{data} {ora_str}", fmt)
+                    break
+                except ValueError:
+                    continue
+            if not dt:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Formato data non riconosciuto: {data}. Usa YYYY-MM-DD o DD/MM/YYYY."
+                )
+            giorno, mese, anno = dt.day, dt.month, dt.year
+            ora_i, minuti = dt.hour, dt.minute
+        else:
+            ora_i = body.get("ora")
+            if not all([giorno, mese, anno]) or ora_i is None or minuti is None:
+                raise HTTPException(status_code=422, detail="Parametri insufficienti.")
 
         # --- Calcoli astrologici ---
         print(f"[AstroBot] Calcolo tema {giorno:02d}/{mese:02d}/{anno} {ora_i:02d}:{minuti:02d} per {citta}")
