@@ -1,120 +1,84 @@
-from typing import Dict, Any, Optional, List, Tuple
-import math
-from ai_utils import call_ai_model
+# ai_utils.py — AstroBot v9 (Groq live)
+import os
+from typing import List, Dict, Optional, Tuple
+from groq import Groq
 
-SEGNI = [
-    "Ariete", "Toro", "Gemelli", "Cancro", "Leone", "Vergine",
-    "Bilancia", "Scorpione", "Sagittario", "Capricorno", "Acquario", "Pesci"
-]
+# ======================================================
+# CONFIGURAZIONE BASE
+# ======================================================
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or "INSERISCI-LA-TUA-CHIAVE"
+DEFAULT_MODEL = os.getenv("AI_MODEL", "mixtral-8x7b")
+DEFAULT_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.3"))
+DEFAULT_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "1000"))
+DEFAULT_PROVIDER = "groq"
 
-# -------------------------
-# Normalizzazione
-# -------------------------
+# Inizializza client
+client_groq = Groq(api_key=GROQ_API_KEY)
 
-def normalize_longitude(deg: float) -> float:
-    if deg is None:
-        return None
-    x = deg % 360.0
-    if x < 0:
-        x += 360.0
-    return x
+# ======================================================
+# CHIAMATA AL MODELLO AI
+# ======================================================
 
+def call_ai_model(
+    messages: List[Dict[str, str]],
+    model: str = DEFAULT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    provider: str = DEFAULT_PROVIDER
+) -> str:
+    """
+    Esegue la chiamata al modello Groq (mixtral-8x7b o altri).
+    """
+    try:
+        if provider == "groq":
+            response = client_groq.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            return response.choices[0].message.content.strip()
 
-def deg_to_sign_dms(longitude: float) -> Tuple[str, int, int]:
-    L = normalize_longitude(longitude)
-    segno_idx = int(L // 30)
-    segno = SEGNI[segno_idx]
-    gradi = int(L % 30)
-    primi = int(round((L - math.floor(L)) * 60))
-    if primi == 60:
-        primi = 0
-        gradi = (gradi + 1) % 30
-        if gradi == 0:
-            segno_idx = (segno_idx + 1) % 12
-            segno = SEGNI[segno_idx]
-    return segno, gradi, primi
+        else:
+            raise ValueError(f"Provider non supportato: {provider}")
 
-
-# -------------------------
-# Pianeti + Case
-# -------------------------
-
-def pianeti_struct(pianeti_raw: Dict[str, Any], case: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    results = []
-    for name, val in pianeti_raw.items():
-        if val is None:
-            continue
-        L = normalize_longitude(float(val))
-        sign, d, m = deg_to_sign_dms(L)
-        casa = case.get(name) if case else None
-        readable = f"{name} in {sign} {d}°{m:02d}'"
-        if casa:
-            readable += f" in {casa}ª casa"
-        results.append({
-            "name": name,
-            "longitude_deg": round(L, 6),
-            "sign": sign,
-            "deg_in_sign": d,
-            "min_in_sign": m,
-            "house": casa,
-            "readable": readable
-        })
-    return sorted(results, key=lambda x: x["name"])
+    except Exception as e:
+        return f"[Errore AI] {str(e)}"
 
 
-# -------------------------
-# Prompt per Groq / GPT
-# -------------------------
+# ======================================================
+# MOCK RAG (senza DB)
+# ======================================================
 
-def build_prompt(asc: Dict[str, Any],
-                 planets: List[Dict[str, Any]],
-                 meta: Dict[str, Any],
-                 domanda_utente: Optional[str]) -> List[Dict[str, str]]:
-    asc_str = f"Ascendente: {asc.get('segno', 'N/D')} {asc.get('grado', 0)}°{asc.get('min', 0):02d}'"
-    planets_text = "\n".join([f"- {p['name']}: {p['readable']}" for p in planets])
-
-    system = (
-        "Sei un astrologo esperto e preciso.\n"
-        "Non modificare i dati astronomici, non inventare posizioni.\n"
-        "Rispondi in tono empatico, ma accurato."
-    )
-
-    base = (
-        f"DATI:\n{asc_str}\n\nPIANETI:\n{planets_text}\n\n"
-        f"Città: {meta.get('citta')} | Data: {meta.get('data')} | Ora: {meta.get('ora')}\n"
-    )
-
-    if domanda_utente:
-        user = f"{base}\nDOMANDA: {domanda_utente}"
-    else:
-        user = f"{base}\nRICHIESTA: Fornisci un'interpretazione sintetica del tema natale."
-
+def retrieve_knowledge(query: str, top_k: int = 3) -> List[Tuple[str, float]]:
+    """
+    Placeholder per futura integrazione con FAISS / Chroma.
+    Restituisce risposte simulate, ma puoi già sostituirle con testi reali.
+    """
     return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user}
+        ("Il Sole rappresenta la vitalità e la volontà di espressione individuale.", 0.91),
+        ("La Luna riflette la sfera emotiva e il bisogno di sicurezza.", 0.87),
+        ("Marte indica energia, impulso e iniziativa personale.", 0.84)
     ]
 
 
-# -------------------------
-# Funzione principale
-# -------------------------
+def export_to_chunks(texts: List[str], chunk_size: int = 500) -> List[str]:
+    """
+    Divide testi lunghi in blocchi per futura indicizzazione RAG.
+    """
+    chunks = []
+    for t in texts:
+        t = t.strip()
+        for i in range(0, len(t), chunk_size):
+            chunks.append(t[i:i+chunk_size])
+    return chunks
 
-def interpreta_groq(asc: Dict[str, Any],
-                    pianeti_raw: Dict[str, float],
-                    meta: Dict[str, Any],
-                    domanda_utente: Optional[str] = None,
-                    model: str = "mixtral-8x7b",
-                    provider: str = "groq",
-                    temperature: float = 0.3,
-                    max_tokens: int = 800) -> str:
-    planets = pianeti_struct(pianeti_raw)
-    messages = build_prompt(asc, planets, meta, domanda_utente)
-    risposta = call_ai_model(
-        messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        provider=provider
-    )
-    return risposta
+
+def generate_with_rag(domanda: str) -> str:
+    docs = retrieve_knowledge(domanda)
+    context = "\n".join([f"- {d[0]} (sim={d[1]:.2f})" for d in docs])
+    system = "Sei un astrologo AI: rispondi solo in base al contesto fornito."
+    user = f"CONTESTO:\n{context}\n\nDOMANDA:\n{domanda}"
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    return call_ai_model(messages)
