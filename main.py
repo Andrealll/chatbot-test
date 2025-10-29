@@ -1,3 +1,42 @@
+# main.py — AstroBot v11
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+import time
+
+from calcoli import (
+    calcola_asc_mc_case,
+    calcola_pianeti_da_df,
+    genera_carta_base64,
+    df_tutti
+)
+from metodi import interpreta_groq
+from rag_utils import get_relevant_chunks
+
+
+# ======================================================
+# CREAZIONE APP FASTAPI
+# ======================================================
+app = FastAPI(title="AstroBot v11", version="11.0")
+
+# Middleware CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ======================================================
+# ENDPOINT DI TEST / ROOT
+# ======================================================
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "AstroBot v11 online 🪐"}
+
+
 # ======================================================
 # ENDPOINT PRINCIPALE: /tema
 # ======================================================
