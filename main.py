@@ -39,17 +39,22 @@ async def tema(request: Request):
         ora_str = body.get("ora")
 
         if not all([citta, data, ora_str]):
-            raise HTTPException(422, "Parametri 'citta', 'data' e 'ora' obbligatori.")
+            raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
 
-        # parsing flessibile
-for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
-    try:
-        dt = datetime.strptime(f"{data} {ora_str}", fmt)
-        break
-    except ValueError:
+        # === Parsing flessibile della data ===
         dt = None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
+            try:
+                dt = datetime.strptime(f"{data} {ora_str}", fmt)
+                break
+            except ValueError:
+                continue
+
         if not dt:
-            raise HTTPException(422, "Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY.")
+            raise HTTPException(
+                status_code=422,
+                detail="Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY."
+            )
 
         giorno, mese, anno = dt.day, dt.month, dt.year
         ora_i, minuti = dt.hour, dt.minute
@@ -64,7 +69,11 @@ for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
         interpretazione_data = interpreta_groq(
             asc=asc,
             pianeti_decod=pianeti_decod,
-            meta={"citta": citta, "data": f"{anno}-{mese:02d}-{giorno:02d}", "ora": f"{ora_i:02d}:{minuti:02d}"}
+            meta={
+                "citta": citta,
+                "data": f"{anno}-{mese:02d}-{giorno:02d}",
+                "ora": f"{ora_i:02d}:{minuti:02d}"
+            }
         )
 
         elapsed = int((time.time() - start) * 1000)
@@ -82,7 +91,6 @@ for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
         raise e
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
 
 
 @app.get("/status")
@@ -109,7 +117,7 @@ async def status_check():
         except Exception as e:
             results["calcolo_pianeti"] = f"❌ errore: {e}"
 
-        # 3️⃣ Geocoding (offline)
+        # 3️⃣ Geocoding (offline o online)
         try:
             info = geocodifica_citta_con_fuso("Napoli", 1986, 7, 19, 8, 50)
             results["geocodifica"] = f"✅ {info['lat']}, {info['lon']} ({info['timezone']})"
