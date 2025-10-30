@@ -36,25 +36,79 @@ else:
 # GEOLOCALIZZAZIONE E FUSO
 # ======================================================
 def geocodifica_citta_con_fuso(citta, anno, mese, giorno, ora, minuti):
-    """Restituisce latitudine, longitudine e fuso orario."""
-    from geopy.geocoders import Nominatim
-    geolocator = Nominatim(user_agent="astrobot")
-    loc = geolocator.geocode(citta, timeout=10)
-    if not loc:
-        raise ValueError(f"Città non trovata: {citta}")
+    """
+    Geocodifica ibrida:
+    1️⃣ Prova con Nominatim (geopy)
+    2️⃣ Se non riesce (timeout o errore di rete), fallback su coordinate approssimative offline
+    """
+    citta = citta.lower().strip()
+    from datetime import datetime
+    import pytz
 
-    tf = TimezoneFinder()
-    timezone_str = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
-    tz = pytz.timezone(timezone_str)
-    dt_local = tz.localize(datetime(anno, mese, giorno, ora, minuti))
-    fuso_orario = dt_local.utcoffset().total_seconds() / 3600.0
-
-    return {
-        "lat": loc.latitude,
-        "lon": loc.longitude,
-        "timezone": timezone_str,
-        "fuso_orario": fuso_orario
+    # 🔹 Mappatura base per fallback offline
+    fallback_coords = {
+        "napoli": (40.8518, 14.2681, "Europe/Rome"),
+        "roma": (41.9028, 12.4964, "Europe/Rome"),
+        "milano": (45.4642, 9.19, "Europe/Rome"),
+        "torino": (45.0703, 7.6869, "Europe/Rome"),
+        "firenze": (43.7696, 11.2558, "Europe/Rome"),
+        "bologna": (44.4949, 11.3426, "Europe/Rome"),
+        "palermo": (38.1157, 13.3615, "Europe/Rome"),
+        "genova": (44.4056, 8.9463, "Europe/Rome"),
+        "bari": (41.1253, 16.8660, "Europe/Rome"),
+        "cagliari": (39.2238, 9.1217, "Europe/Rome"),
     }
+
+    try:
+        # 1️⃣ Tentativo online con geopy / Nominatim
+        from geopy.geocoders import Nominatim
+        geolocator = Nominatim(user_agent="astrobot")
+        loc = geolocator.geocode(citta, timeout=10)
+        if not loc:
+            raise ValueError("Città non trovata online.")
+
+        # 2️⃣ Ricava timezone con timezonefinder
+        from timezonefinder import TimezoneFinder
+        tf = TimezoneFinder()
+        timezone_str = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
+        if not timezone_str:
+            timezone_str = "UTC"
+
+        tz = pytz.timezone(timezone_str)
+        dt_local = tz.localize(datetime(anno, mese, giorno, ora, minuti))
+        fuso_orario = dt_local.utcoffset().total_seconds() / 3600.0
+
+        return {
+            "lat": loc.latitude,
+            "lon": loc.longitude,
+            "timezone": timezone_str,
+            "fuso_orario": fuso_orario
+        }
+
+    except Exception as e:
+        # 🔸 Fallback offline
+        if citta in fallback_coords:
+            lat, lon, tz_name = fallback_coords[citta]
+            tz = pytz.timezone(tz_name)
+            dt_local = tz.localize(datetime(anno, mese, giorno, ora, minuti))
+            fuso_orario = dt_local.utcoffset().total_seconds() / 3600.0
+            return {
+                "lat": lat,
+                "lon": lon,
+                "timezone": tz_name,
+                "fuso_orario": fuso_orario,
+                "note": f"Fallback offline ({e})"
+            }
+        else:
+            # come ultima spiaggia, coord generiche (Roma)
+            return {
+                "lat": 41.9,
+                "lon": 12.5,
+                "timezone": "Europe/Rome",
+                "fuso_orario": 1.0,
+                "note": f"Fallback generico: {e}"
+            }
+
 
 
 # ======================================================
