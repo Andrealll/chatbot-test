@@ -1,82 +1,65 @@
-# calcoli.py — AstroBot v11
-# Accurate Ascendant + Planets interpolation
-
-import numpy as np
+import os
 import pandas as pd
-import math, os
-from math import radians, degrees, atan2, asin
-from datetime import datetime, timedelta
-from skyfield.api import load
+import numpy as np
+from math import degrees, atan2, asin
+from datetime import datetime
 from timezonefinder import TimezoneFinder
 import pytz
+from skyfield.api import load
+
 
 # ======================================================
-# CONFIG
+# CARICAMENTO EFFEMERIDI
 # ======================================================
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1950_2025.xlsx")
+BASE_DIR = os.path.dirname(__file__)
+EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1975_2025.xlsx")
 
 try:
     df_tutti = pd.read_excel(EFF_PATH)
+    print(f"[AstroBot] Effemeridi caricate correttamente ({len(df_tutti)} righe)")
 except Exception as e:
-    print(f"[ATTENZIONE] Errore nel caricamento effemeridi: {e}")
+    print(f"[ERRORE] Impossibile caricare effemeridi: {e}")
     df_tutti = None
 
-ts = load.timescale()
 
 # ======================================================
-# SUPPORT FUNCTIONS
+# GEOLOCALIZZAZIONE E FUSO
 # ======================================================
-
-def _obliquita_laskar_rad(t):
-    """Calcola l'obliquità dell'eclittica in radianti."""
-    T = (t.tt - 2451545.0) / 36525.0
-    eps = np.radians(23 + 26/60 + (21.448 - 46.8150*T - 0.00059*T**2 + 0.001813*T**3)/3600)
-    return eps
-
-def _deg_to_sign(deg):
-    segni = [
-        "Ariete", "Toro", "Gemelli", "Cancro", "Leone", "Vergine",
-        "Bilancia", "Scorpione", "Sagittario", "Capricorno", "Acquario", "Pesci"
-    ]
-    idx = int((deg % 360) // 30)
-    return segni[idx], round(deg % 30, 2)
-
 def geocodifica_citta_con_fuso(citta, anno, mese, giorno, ora, minuti):
-    """Ottiene latitudine, longitudine, timezone e fuso locale usando timezonefinder."""
-    # Dizionario rapido di fallback (se non si vuole usare API)
-    lookup = {
-        "Roma": (41.9028, 12.4964),
-        "Milano": (45.4642, 9.19),
-        "Napoli": (40.8518, 14.2681),
-        "Torino": (45.0703, 7.6869),
-        "Firenze": (43.7699, 11.2556)
-    }
-    lat, lon = lookup.get(citta, (41.9, 12.5))
-    tz_name = TimezoneFinder().timezone_at(lng=lon, lat=lat)
-    tz = pytz.timezone(tz_name)
+    """Restituisce latitudine, longitudine e fuso orario della città."""
+    from geopy.geocoders import Nominatim
+    geolocator = Nominatim(user_agent="astrobot")
+    loc = geolocator.geocode(citta, timeout=10)
+    if not loc:
+        raise ValueError(f"Città non trovata: {citta}")
+
+    tf = TimezoneFinder()
+    timezone_str = tf.timezone_at(lat=loc.latitude, lng=loc.longitude)
+    tz = pytz.timezone(timezone_str)
     dt_local = tz.localize(datetime(anno, mese, giorno, ora, minuti))
-    fuso = dt_local.utcoffset().total_seconds() / 3600.0
-    return {"lat": lat, "lon": lon, "timezone": tz_name, "fuso_orario": fuso}
+    fuso_orario = dt_local.utcoffset().total_seconds() / 3600.0
+
+    return {
+        "lat": loc.latitude,
+        "lon": loc.longitude,
+        "timezone": timezone_str,
+        "fuso_orario": fuso_orario
+    }
 
 
 # ======================================================
 # CALCOLO ASCENDENTE E CASE
 # ======================================================
-
 def calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti, sistema_case='equal'):
     info = geocodifica_citta_con_fuso(citta, anno, mese, giorno, ora, minuti)
-    lat_deg, lon_deg, fuso = info["lat"], info["lon"], info["fuso_orario"]
+    lat, lon, fuso = info["lat"], info["lon"], info["fuso_orario"]
 
     ts = load.timescale()
     t = ts.utc(anno, mese, giorno, ora - fuso, minuti)
-    eps = _obliquita_laskar_rad(t)
-    phi = np.radians(lat_deg)
-
-    # Tempo siderale locale (in radianti)
-    lst_hours = t.gmst + (lon_deg / 15.0)
-    LST = np.radians((lst_hours % 24.0) * 15.0)
+    eps = np.radians(23.4393)  # obliquità media
+    phi = np.radians(lat)
+    lst_hours = (t.gmst + lon / 15.0) % 24
+    LST = np.radians(lst_hours * 15)
 
     def ra_dec_from_lambda(lmbda):
         sL, cL = np.sin(lmbda), np.cos(lmbda)
@@ -96,10 +79,8 @@ def calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti, sistema_case='eq
         h = altitude(lambda_rad)
         num = -np.sin(H)
         den = (np.tan(delta)*np.cos(phi) - np.sin(phi)*np.cos(H))
-        A = np.arctan2(num, den) % (2*np.pi)
-        return A, h
+        return np.arctan2(num, den) % (2*np.pi), h
 
-    # ricerca dell'ascendente (punto all'orizzonte est)
     lambdas = np.linspace(0, 2*np.pi, 721)
     best_lambda, best_score = None, 1e9
     for lam in lambdas:
@@ -108,34 +89,34 @@ def calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti, sistema_case='eq
         if score < best_score:
             best_score, best_lambda = score, lam
 
-    fine = np.linspace(best_lambda - np.deg2rad(2), best_lambda + np.deg2rad(2), 401)
-    for lam in fine:
-        A, h = azimuth(lam)
-        score = abs(h) + 0.5*abs((A - np.pi/2 + np.pi) % (2*np.pi) - np.pi)
-        if score < best_score:
-            best_score, best_lambda = score, lam
+    asc_deg = (degrees(best_lambda) % 360.0)
 
-    asc_deg = float((degrees(best_lambda)) % 360.0)
-    segno_asc, gradi_asc = _deg_to_sign(asc_deg)
+    segni = [
+        "Ariete", "Toro", "Gemelli", "Cancro", "Leone", "Vergine",
+        "Bilancia", "Scorpione", "Sagittario", "Capricorno", "Acquario", "Pesci"
+    ]
+    segno_idx = int(asc_deg // 30)
+    segno_nome = segni[segno_idx]
+    gradi_segno = round(asc_deg % 30, 2)
 
-    # Medio Cielo
     y_mc = np.sin(LST)
     x_mc = np.cos(LST) * np.cos(eps)
-    mc_deg = float(np.degrees(np.arctan2(y_mc, x_mc)) % 360.0)
-    segno_mc, gradi_mc = _deg_to_sign(mc_deg)
+    mc_deg = np.degrees(np.arctan2(y_mc, x_mc)) % 360
+    segno_idx_mc = int(mc_deg // 30)
+    segno_mc = segni[segno_idx_mc]
+    gradi_mc = round(mc_deg % 30, 2)
 
-    # Case equal
-    case = [(asc_deg + i*30) % 360 for i in range(12)]
+    case = [(asc_deg + i * 30) % 360 for i in range(12)]
 
     return {
         "citta": citta,
-        "lat": round(lat_deg, 4),
-        "lon": round(lon_deg, 4),
+        "lat": round(lat, 4),
+        "lon": round(lon, 4),
         "timezone": info["timezone"],
         "fuso_orario": round(fuso, 2),
         "ASC": round(asc_deg, 2),
-        "ASC_segno": segno_asc,
-        "ASC_gradi_segno": gradi_asc,
+        "ASC_segno": segno_nome,
+        "ASC_gradi_segno": gradi_segno,
         "MC": round(mc_deg, 2),
         "MC_segno": segno_mc,
         "MC_gradi_segno": gradi_mc,
@@ -145,84 +126,77 @@ def calcola_asc_mc_case(citta, anno, mese, giorno, ora, minuti, sistema_case='eq
 
 
 # ======================================================
-# CALCOLO PIANETI INTERPOLATO DALLE EFFEMERIDI
+# CALCOLO POSIZIONI PLANETARIE (INTERPOLAZIONE ORARIA)
 # ======================================================
-
-def calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora=0, minuti=0, colonne_extra=('Nodo','Lilith')):
+def calcola_pianeti_da_df(df, giorno, mese, anno, ora=0, minuti=0):
     """
-    Restituisce le longitudini planetarie (in gradi) per data e ora specifica.
-    Usa le effemeridi giornaliere e interpola linearmente l'ora.
+    Calcola posizioni planetarie ignorando il segno (retrogrado) nei valori.
+    Restituisce {pianeta: {gradi_eclittici, retrogrado}}.
     """
-    if df_tutti is None:
+    if df is None or df.empty:
         raise ValueError("Effemeridi non caricate correttamente.")
-    
-    # colonna data nel formato datetime
-    if 'Data' in df_tutti.columns:
-        df_tutti['Data'] = pd.to_datetime(df_tutti['Data'])
-    else:
-        raise ValueError("Il file effemeridi deve contenere una colonna 'Data'.")
 
-    target_date = datetime(anno, mese, giorno)
-    next_date = target_date + timedelta(days=1)
+    r0 = df[(df["Anno"] == anno) & (df["Mese"] == mese) & (df["Giorno"].astype(int) == int(giorno))]
+    r1 = df[(df["Anno"] == anno) & (df["Mese"] == mese) & (df["Giorno"].astype(int) == int(giorno) + 1)]
 
-    # trova righe corrispondenti
-    row_today = df_tutti[df_tutti['Data'] == target_date]
-    row_next = df_tutti[df_tutti['Data'] == next_date]
+    if r0.empty:
+        raise ValueError(f"Nessuna effemeride trovata per {giorno}/{mese}/{anno}")
+    if r1.empty:
+        r1 = r0.copy()
 
-    if row_today.empty or row_next.empty:
-        raise ValueError("Data fuori intervallo effemeridi.")
+    f0, f1 = r0.iloc[0], r1.iloc[0]
+    frac = (ora + minuti / 60.0) / 24.0
 
-    # frazione oraria del giorno (0.0–1.0)
-    frac = (ora + minuti/60) / 24.0
+    skip_cols = {"Anno", "Mese", "Giorno"}
+    planet_cols = [c for c in df.columns if c not in skip_cols]
 
     pianeti = {}
-    planet_cols = [c for c in df_tutti.columns if c not in ['Data']]
-
     for col in planet_cols:
-        val_today = float(row_today[col].values[0])
-        val_next = float(row_next[col].values[0])
-        diff = (val_next - val_today) % 360
-        interpolated = (val_today + diff * frac) % 360
-        pianeti[col] = interpolated
-
-    # Nodo e Lilith opzionali
-    if 'Nodo' in colonne_extra:
-        pianeti['Nodo'] = (pianeti['Luna'] + 180) % 360
-    if 'Lilith' in colonne_extra:
-        pianeti['Lilith'] = (pianeti['Luna'] - 180) % 360
+        raw0 = float(f0[col])
+        raw1 = float(f1[col])
+        retrogrado = raw0 < 0
+        v0, v1 = abs(raw0) % 360.0, abs(raw1) % 360.0
+        v_interp = (v0 + (v1 - v0) * frac) % 360.0
+        pianeti[col] = {"gradi_eclittici": round(v_interp, 4), "retrogrado": retrogrado}
 
     return pianeti
 
 
 # ======================================================
-# GRAFICO POLARE DEL TEMA
+# CONVERSIONE GRADI → SEGNO + GRADI SEGNO
 # ======================================================
+def decodifica_segni(pianeti_dict: dict) -> dict:
+    segni = [
+        "Ariete","Toro","Gemelli","Cancro","Leone","Vergine",
+        "Bilancia","Scorpione","Sagittario","Capricorno","Acquario","Pesci"
+    ]
+    out = {}
+    for nome, data in pianeti_dict.items():
+        g = data["gradi_eclittici"]
+        retro = data["retrogrado"]
+        idx = int(g // 30)
+        segno = segni[idx]
+        gradi_segno = round(g % 30, 2)
+        out[nome] = {
+            "segno": segno,
+            "gradi_segno": gradi_segno,
+            "gradi_eclittici": g,
+            "retrogrado": retro
+        }
+    return out
 
-import io, base64
-import matplotlib.pyplot as plt
 
+# ======================================================
+# GENERA IMMAGINE CARTA (placeholder)
+# ======================================================
 def genera_carta_base64(anno, mese, giorno, ora, minuti, citta):
-    """
-    Disegna il tema natale in formato base64 (diagramma polare).
-    """
-    pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
-    labels = list(pianeti_raw.keys())
-    angoli = [np.deg2rad(pianeti_raw[k]) for k in labels]
-    radii = np.ones(len(labels))
-
-    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
-    ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1)
-    ax.set_xticks(np.linspace(0, 2*np.pi, 12, endpoint=False))
-    ax.set_xticklabels(["♈︎","♉︎","♊︎","♋︎","♌︎","♍︎","♎︎","♏︎","♐︎","♑︎","♒︎","♓︎"])
-    ax.set_yticklabels([])
-    ax.scatter(angoli, radii, s=80, c="black")
-    for i, label in enumerate(labels):
-        ax.text(angoli[i], 1.05, label, ha='center', va='center', fontsize=8)
-    ax.set_title(f"{citta} – {giorno:02d}/{mese:02d}/{anno}", va='bottom')
-
+    import io, base64
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(3, 3))
+    plt.title(f"Tema di {citta}\n{giorno:02d}/{mese:02d}/{anno}")
+    plt.plot([0, 1], [0, 1], "k--")
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{img_b64}"
+    plt.savefig(buf, format="png")
+    plt.close()
+    buf.seek(0)
+    return "data:image/png;base64," + base64.b64encode(buf.read()).decode()
