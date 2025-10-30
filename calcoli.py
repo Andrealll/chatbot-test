@@ -12,7 +12,7 @@ from skyfield.api import load
 # CARICAMENTO EFFEMERIDI
 # ======================================================
 BASE_DIR = os.path.dirname(__file__)
-EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1975_2025.xlsx")
+EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1950_2025.xlsx")
 
 try:
     df_tutti = pd.read_excel(EFF_PATH)
