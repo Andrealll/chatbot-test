@@ -42,12 +42,12 @@ async def tema(request: Request):
             raise HTTPException(422, "Parametri 'citta', 'data' e 'ora' obbligatori.")
 
         # parsing flessibile
-        for fmt in ("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M"):
-            try:
-                dt = datetime.strptime(f"{data} {ora_str}", fmt)
-                break
-            except ValueError:
-                dt = None
+for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
+    try:
+        dt = datetime.strptime(f"{data} {ora_str}", fmt)
+        break
+    except ValueError:
+        dt = None
         if not dt:
             raise HTTPException(422, "Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY.")
 
