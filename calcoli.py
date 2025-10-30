@@ -12,7 +12,7 @@ from skyfield.api import load
 # CARICAMENTO EFFEMERIDI ROBUSTO
 # ======================================================
 BASE_DIR = os.path.dirname(__file__)
-EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1975_2025.xlsx")
+EFF_PATH = os.path.join(BASE_DIR, "effemeridi_1950_2025.xlsx")
 
 def _carica_effemeridi(path):
     try:
