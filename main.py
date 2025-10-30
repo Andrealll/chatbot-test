@@ -82,3 +82,61 @@ async def tema(request: Request):
         raise e
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+
+@app.get("/status")
+async def status_check():
+    """
+    Test diagnostico: verifica disponibilità di servizi e dipendenze.
+    """
+    from calcoli import df_tutti, calcola_pianeti_da_df, geocodifica_citta_con_fuso
+    from metodi import call_ai_model
+
+    results = {}
+    try:
+        # 1️⃣ Effemeridi
+        if df_tutti is None or df_tutti.empty:
+            results["effemeridi"] = "❌ non caricate"
+        else:
+            results["effemeridi"] = f"✅ {len(df_tutti)} righe caricate"
+
+        # 2️⃣ Calcolo rapido pianeti
+        try:
+            pianeti = calcola_pianeti_da_df(df_tutti, 19, 7, 1986, 8, 50)
+            sole = pianeti.get("Sole", {})
+            results["calcolo_pianeti"] = f"✅ Sole {sole}" if sole else "⚠️ dati parziali"
+        except Exception as e:
+            results["calcolo_pianeti"] = f"❌ errore: {e}"
+
+        # 3️⃣ Geocoding (offline)
+        try:
+            info = geocodifica_citta_con_fuso("Napoli", 1986, 7, 19, 8, 50)
+            results["geocodifica"] = f"✅ {info['lat']}, {info['lon']} ({info['timezone']})"
+        except Exception as e:
+            results["geocodifica"] = f"❌ errore: {e}"
+
+        # 4️⃣ Test AI Groq
+        try:
+            import os
+            if os.environ.get("GROQ_API_KEY"):
+                response = call_ai_model([
+                    {"role": "user", "content": "Scrivi 'ok'."}
+                ], max_tokens=10)
+                if "ok" in response.lower():
+                    results["AI_Groq"] = "✅ risposta corretta"
+                else:
+                    results["AI_Groq"] = f"⚠️ risposta inattesa: {response}"
+            else:
+                results["AI_Groq"] = "⚠️ GROQ_API_KEY non impostata"
+        except Exception as e:
+            results["AI_Groq"] = f"❌ errore: {e}"
+
+        return {
+            "status": "ok",
+            "message": "Self-test completato",
+            "results": results
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e), "results": results}
