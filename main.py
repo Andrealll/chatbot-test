@@ -3,14 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import time
 
-from calcoli import (
+from astrobot_core.calcoli import (
     df_tutti,
     calcola_asc_mc_case,
     calcola_pianeti_da_df,
     decodifica_segni,
     genera_carta_base64
 )
-from metodi import interpreta_groq
+from astrobot_core.metodi import interpreta_groq
 
 
 app = FastAPI(title="AstroBot v13", version="13.0")
@@ -98,8 +98,8 @@ async def status_check():
     """
     Test diagnostico: verifica disponibilità di servizi e dipendenze.
     """
-    from calcoli import df_tutti, calcola_pianeti_da_df, geocodifica_citta_con_fuso
-    from metodi import call_ai_model
+    from astrobot_core.calcoli import df_tutti, calcola_pianeti_da_df, geocodifica_citta_con_fuso
+    from astrobot_core.metodi import call_ai_model
 
     results = {}
     try:
