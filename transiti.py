@@ -61,6 +61,29 @@ def _extract_degree(val: Any) -> Optional[float]:
     return None
 
 # =========================
+# Filtri sui nomi
+# =========================
+ALLOWED_BODIES = {
+    # pianeti/luminari in italiano
+    "sole", "luna", "mercurio", "venere", "marte",
+    "giove", "saturno", "urano", "nettuno", "plutone",
+    # punti opzionali
+    "nodo", "lilith"
+}
+# chiavi da escludere sempre (rumore frequente)
+EXCLUDE_KEYS = {
+    "data", "date", "ora", "time", "citta", "city",
+    "asc", "ascendente", "mc", "medium coeli",
+    "lat", "lon", "long", "longitudine", "lambda", "ecl_lon"
+}
+
+def _is_planet_name(name: str) -> bool:
+    n = name.strip().lower()
+    if n in EXCLUDE_KEYS:
+        return False
+    return n in ALLOWED_BODIES
+
+# =========================
 # Spec aspetti
 # =========================
 _ASPECT_SPEC = {
@@ -102,28 +125,32 @@ def calcola_transiti_data_fissa(
 ) -> Dict:
     """
     Calcola:
-      - posizioni planetarie (longitudini 0..360)
+      - posizioni planetarie (longitudini 0..360) per i soli corpi ammessi
       - ASC/MC/Case (se 'citta' è fornita)
       - aspetti tra tutte le coppie di pianeti (senza duplicati)
     """
     if df_tutti is None or getattr(df_tutti, "empty", False):
         raise RuntimeError("Effemeridi non caricate correttamente (df_tutti è vuoto o None).")
 
-    # 1) Pianeti (usa la tua firma con ora/minuti)
+    # 1) Pianeti (firma tua) + filtro nomi + normalizzazione
     raw_pianeti = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
 
-    # Normalizza in {nome: gradi_float}
     long_pianeti: Dict[str, float] = {}
-    scartati: List[str] = []
+    scartati_valore: List[str] = []
+    esclusi_nome: List[str] = []
+
     for nome, val in raw_pianeti.items():
+        if not _is_planet_name(nome):
+            esclusi_nome.append(str(nome))
+            continue
         deg = _extract_degree(val)
         if deg is None:
-            scartati.append(nome)
+            scartati_valore.append(str(nome))
         else:
-            long_pianeti[nome] = deg
+            long_pianeti[str(nome)] = deg
 
     if not long_pianeti:
-        raise ValueError("Nessuna longitudine numerica ricavata da calcola_pianeti_da_df (formato inatteso).")
+        raise ValueError("Nessuna longitudine planetaria valida ricavata (nomi filtrati o valori non numerici).")
 
     # 2) ASC/MC/Case (solo se ho la città, coerente con /tema)
     asc_mc_case = None
@@ -156,10 +183,12 @@ def calcola_transiti_data_fissa(
     ordine_tipo = {"congiunzione": 0, "opposizione": 1, "trigono": 2, "quadratura": 3}
     aspetti.sort(key=lambda x: (ordine_tipo.get(x["tipo"], 99), x["orb"]))
 
-    # Meta diagnostica: cosa non sono riuscito a leggere
+    # Meta diagnostica: cosa ho escluso e perché
     meta: Dict[str, Any] = {}
-    if scartati:
-        meta["pianeti_scartati"] = scartati
+    if esclusi_nome:
+        meta["esclusi_per_nome"] = esclusi_nome
+    if scartati_valore:
+        meta["scartati_per_valore"] = scartati_valore
 
     return {
         "data": f"{anno:04d}-{mese:02d}-{giorno:02d} {ora:02d}:{minuti:02d}",
@@ -168,4 +197,3 @@ def calcola_transiti_data_fissa(
         "aspetti": aspetti,
         "meta": meta
     }
-
