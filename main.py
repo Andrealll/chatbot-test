@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 import time
 import os
 
@@ -12,7 +12,7 @@ from astrobot_core.calcoli import (
     calcola_asc_mc_case,
     calcola_pianeti_da_df,
     decodifica_segni,
-    genera_carta_base64
+    genera_carta_base64,
 )
 from astrobot_core.metodi import interpreta_groq
 
@@ -53,9 +53,9 @@ async def tema(request: Request):
         if not all([citta, data, ora_str]):
             raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
 
-        # Parsing flessibile della data
+        # parsing flessibile (YYYY-MM-DD / DD/MM/YYYY) + HH:MM
         dt = None
-        for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
+        for fmt in ("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%Y/%m/%d %H:%M"):
             try:
                 dt = datetime.strptime(f"{data} {ora_str}", fmt)
                 break
@@ -67,24 +67,20 @@ async def tema(request: Request):
                 detail="Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY con ora HH:MM."
             )
 
-        giorno, mese, anno = dt.day, dt.month, dt.year
-        ora_i, minuti = dt.hour, dt.minute
+        g, m, a = dt.day, dt.month, dt.year
+        h, mi = dt.hour, dt.minute
 
-        # Calcoli astronomici (dal core)
-        asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
-        pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora_i, minuti)
+        # calcoli core
+        asc = calcola_asc_mc_case(citta, a, m, g, h, mi)
+        pianeti_raw = calcola_pianeti_da_df(df_tutti, g, m, a, h, mi)
         pianeti_decod = decodifica_segni(pianeti_raw)
-        img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
+        img_b64 = genera_carta_base64(a, m, g, h, mi, citta)
 
-        # Interpretazione AI (Groq)
+        # interpretazione (Groq)
         interpretazione_data = interpreta_groq(
             asc=asc,
             pianeti_decod=pianeti_decod,
-            meta={
-                "citta": citta,
-                "data": f"{anno}-{mese:02d}-{giorno:02d}",
-                "ora": f"{ora_i:02d}:{minuti:02d}"
-            }
+            meta={"citta": citta, "data": f"{a}-{m:02d}-{g:02d}", "ora": f"{h:02d}:{mi:02d}"}
         )
 
         elapsed = int((time.time() - start) * 1000)
@@ -96,177 +92,3 @@ async def tema(request: Request):
             "sintesi": interpretazione_data.get("sintesi"),
             "image_base64": img_b64,
             "elapsed_ms": elapsed
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# --------------------------- STATUS ---------------------------
-
-@app.get("/status", tags=["Diagnostica"], summary="Self-test servizi e dipendenze")
-async def status_check():
-    results = {}
-    try:
-        # Effemeridi
-        if df_tutti is None or getattr(df_tutti, "empty", True):
-            results["effemeridi"] = "❌ non caricate"
-        else:
-            results["effemeridi"] = f"✅ {len(df_tutti)} righe caricate"
-
-        # Calcolo rapido pianeti
-        try:
-            pianeti = calcola_pianeti_da_df(df_tutti, 19, 7, 1986, 8, 50)
-            sole = pianeti.get("Sole")
-            results["calcolo_pianeti"] = f"✅ Sole {sole}" if sole is not None else "⚠️ dati parziali"
-        except Exception as e:
-            results["calcolo_pianeti"] = f"❌ errore: {e}"
-
-        # Geocoding + fuso (se disponibile nel core)
-        try:
-            from astrobot_core.calcoli import geocodifica_citta_con_fuso
-            info = geocodifica_citta_con_fuso("Napoli", 1986, 7, 19, 8, 50)
-            results["geocodifica"] = f"✅ {info['lat']}, {info['lon']} ({info['timezone']})"
-        except Exception as e:
-            results["geocodifica"] = f"⚠️ skip/errore: {e}"
-
-        # Test AI Groq
-        try:
-            from astrobot_core.metodi import call_ai_model
-            if os.environ.get("GROQ_API_KEY"):
-                response = call_ai_model(
-                    [{"role": "user", "content": "Scrivi 'ok'."}],
-                    max_tokens=10
-                )
-                if isinstance(response, str) and "ok" in response.lower():
-                    results["AI_Groq"] = "✅ risposta corretta"
-                else:
-                    results["AI_Groq"] = f"⚠️ risposta inattesa: {response}"
-            else:
-                results["AI_Groq"] = "⚠️ GROQ_API_KEY non impostata"
-        except Exception as e:
-            results["AI_Groq"] = f"❌ errore: {e}"
-
-        return {"status": "ok", "message": "Self-test completato", "results": results}
-
-    except Exception as e:
-        return {"status": "error", "message": str(e), "results": results}
-
-# --------------------------- TRANSITI (data fissa) ---------------------------
-
-class TransitiReq(BaseModel):
-    giorno: int
-    mese: int
-    anno: int
-    ora: int = 12
-    minuti: int = 0
-    citta: Optional[str] = None
-    include_node: bool = True
-    include_lilith: bool = True
-
-@app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (POST)")
-def transiti_post(req: TransitiReq):
-    return calcola_transiti_data_fissa(
-        giorno=req.giorno,
-        mese=req.mese,
-        anno=req.anno,
-        ora=req.ora,
-        minuti=req.minuti,
-        citta=req.citta,
-        include_node=req.include_node,
-        include_lilith=req.include_lilith
-    )
-
-@app.get("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (GET)")
-def transiti_get(
-    giorno: int,
-    mese: int,
-    anno: int,
-    ora: int = 12,
-    minuti: int = 0,
-    citta: Optional[str] = None,
-    include_node: bool = True,
-    include_lilith: bool = True
-):
-    return calcola_transiti_data_fissa(
-        giorno=giorno,
-        mese=mese,
-        anno=anno,
-        ora=ora,
-        minuti=minuti,
-        citta=citta,
-        include_node=include_node,
-        include_lilith=include_lilith
-    )
-
-# --------------------------- SINASTRIA ---------------------------
-
-@app.post("/sinastria", tags=["Sinastria"], summary="Sinastria: aspetti incrociati tra due temi (pianeti + ASC)")
-async def api_sinastria(payload: dict = Body(...)):
-    """
-    Payload:
-    {
-      "A": {"data": "1986-07-19", "ora": "10:30", "citta": "Milano, IT"},
-      "B": {"data": "1990-01-01", "ora": "15:00", "citta": "Napoli, IT"}
-    }
-    """
-    try:
-        A = payload.get("A", {})
-        B = payload.get("B", {})
-
-        def parse_side(side):
-            data = side.get("data")
-            if not data:
-                raise ValueError("Campo 'data' mancante")
-            ora = side.get("ora", "00:00") or "00:00"
-            citta = side.get("citta")
-            if not citta:
-                raise ValueError("Campo 'citta' mancante")
-            dt = datetime.strptime(f"{data} {ora}", "%Y-%m-%d %H:%M")
-            return dt, citta
-
-        dtA, cittaA = parse_side(A)
-        dtB, cittaB = parse_side(B)
-
-        result = calcola_sinastria(dtA, cittaA, dtB, cittaB)
-        return {"status": "ok", "result": result}
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
-
-# --------------------------- TRANSITI SU DUE DATE ---------------------------
-
-@app.post("/transiti-intervallo", tags=["Transiti"], summary="Confronta aspetti tra due date (persistono/entrano/escono)")
-async def transiti_intervallo(payload: dict = Body(...)):
-    """
-    Payload:
-    {
-      "data_inizio": "1986-07-19",
-      "ora_inizio": "10:30",
-      "data_fine": "1986-07-26",
-      "ora_fine": "12:00",
-      "include_node": true,
-      "include_lilith": true
-    }
-    """
-    try:
-        din = payload.get("data_inizio")
-        dfi = payload.get("data_fine")
-        if not din or not dfi:
-            raise ValueError("Campi 'data_inizio' e 'data_fine' obbligatori")
-
-        oin = payload.get("ora_inizio", "00:00") or "00:00"
-        ofi = payload.get("ora_fine", "00:00") or "00:00"
-
-        include_node = bool(payload.get("include_node", True))
-        include_lilith = bool(payload.get("include_lilith", True))
-
-        dt_start = datetime.strptime(f"{din} {oin}", "%Y-%m-%d %H:%M")
-        dt_end   = datetime.strptime(f"{dfi} {ofi}", "%Y-%m-%d %H:%M")
-
-        result = transiti_su_due_date(dt_start, dt_end, include_node, include_lilith)
-        return {"status": "ok", "result": result}
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
