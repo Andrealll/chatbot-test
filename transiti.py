@@ -87,10 +87,10 @@ def _is_planet_name(name: str) -> bool:
 # Spec aspetti
 # =========================
 _ASPECT_SPEC = {
-    "congiunzione": {"angles": [0],         "orb": 6},
-    "opposizione":  {"angles": [180],       "orb": 6},
-    "trigono":      {"angles": [120, 240],  "orb": 4},
-    "quadratura":   {"angles": [90, 270],   "orb": 4},
+    "congiunzione": {"angles": [0],         "orb": 8},
+    "opposizione":  {"angles": [180],       "orb": 8},
+    "trigono":      {"angles": [120, 240],  "orb": 6},
+    "quadratura":   {"angles": [90, 270],   "orb": 6},
 }
 
 def _ang_delta(a: float, b: float) -> float:
