@@ -149,3 +149,45 @@ async def status_check():
     except Exception as e:
         return {"status": "error", "message": str(e), "results": results}
  
+# --- imports già presenti ---
+# from fastapi import FastAPI, Request, HTTPException
+# ...
+# from calcoli import df_tutti, calcola_asc_mc_case, calcola_pianeti_da_df, decodifica_segni, genera_carta_base64
+# from metodi import interpreta_groq
+
+# importa la funzione dove l'hai messa (transiti.py o calcoli.py)
+try:
+    from transiti import calcola_transiti_data_fissa
+except ImportError:
+    from calcoli import calcola_transiti_data_fissa
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+class TransitiReq(BaseModel):
+    giorno: int
+    mese: int
+    anno: int
+    ora: int = 12
+    minuti: int = 0
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    fuso_orario: float = 0.0
+    sistema_case: str = "equal"
+    include_extras: List[str] = ["Nodo", "Lilith"]
+
+@app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa")
+def transiti(req: TransitiReq):
+    return calcola_transiti_data_fissa(
+        giorno=req.giorno,
+        mese=req.mese,
+        anno=req.anno,
+        ora=req.ora,
+        minuti=req.minuti,
+        lat=req.lat,
+        lon=req.lon,
+        fuso_orario=req.fuso_orario,
+        sistema_case=req.sistema_case,
+        include_extras=tuple(req.include_extras or []),
+        usa_df=True,
+    )
