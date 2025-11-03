@@ -18,10 +18,13 @@ from astrobot_core.metodi import interpreta_groq
 
 # ---- CORE: sinastria & transiti ----
 from astrobot_core.sinastria import sinastria as calcola_sinastria
-from astrobot_core.transiti import (
-    calcola_transiti_data_fissa,
-    transiti_su_due_date,
-)
+
+# transiti_su_due_date potrebbe non esistere in alcune build del package
+try:
+    from astrobot_core.transiti import calcola_transiti_data_fissa, transiti_su_due_date
+except ImportError:
+    from astrobot_core.transiti import calcola_transiti_data_fissa
+    transiti_su_due_date = None
 
 app = FastAPI(title="AstroBot v13", version="13.0")
 
@@ -103,6 +106,9 @@ async def tema(request: Request):
 
 @app.get("/status", tags=["Diagnostica"], summary="Self-test servizi e dipendenze")
 async def status_check():
+    import astrobot_core.transiti as core_transiti
+    import astrobot_core.sinastria as core_sinastria
+
     results = {}
     try:
         # effemeridi
@@ -140,6 +146,12 @@ async def status_check():
                 results["AI_Groq"] = "⚠️ GROQ_API_KEY non impostata"
         except Exception as e:
             results["AI_Groq"] = f"❌ errore: {e}"
+
+        # path dei moduli effettivamente caricati
+        results["module_paths"] = {
+            "astrobot_core.transiti": getattr(core_transiti, "__file__", None),
+            "astrobot_core.sinastria": getattr(core_sinastria, "__file__", None),
+        }
 
         return {"status": "ok", "message": "Self-test completato", "results": results}
 
@@ -241,6 +253,9 @@ async def transiti_intervallo(payload: dict = Body(...)):
     }
     """
     try:
+        if transiti_su_due_date is None:
+            raise HTTPException(status_code=501, detail="Funzione transiti_su_due_date non disponibile nella versione attuale di astrobot_core.")
+
         din = payload.get("data_inizio")
         dfi = payload.get("data_fine")
         if not din or not dfi:
@@ -257,5 +272,7 @@ async def transiti_intervallo(payload: dict = Body(...)):
         result = transiti_su_due_date(dt_start, dt_end, include_node, include_lilith)
         return {"status": "ok", "result": result}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
