@@ -6,7 +6,7 @@ from typing import Optional
 import time
 import os
 
-# ---- Pacchetto core (tuo) ----
+# ---- CORE: calcoli & metodi ----
 from astrobot_core.calcoli import (
     df_tutti,
     calcola_asc_mc_case,
@@ -16,34 +16,28 @@ from astrobot_core.calcoli import (
 )
 from astrobot_core.metodi import interpreta_groq
 
-# ---- Transiti (data fissa) obbligatorio ----
-from transiti import calcola_transiti_data_fissa
-
-# ---- Sinastria (usa il file sinastria.py accanto a main.py, oppure sposta nel tuo package e cambia l'import) ----
-from sinastria import sinastria as calcola_sinastria  # se la funzione è in astrobot_core, usa: from astrobot_core.sinastria import sinastria as calcola_sinastria
-
-# ---- Transiti su due date (opzionale): import "soft" per non rompere l'avvio se non presente ----
-try:
-    from transiti import transiti_su_due_date
-except Exception:
-    transiti_su_due_date = None
-
+# ---- CORE: sinastria & transiti ----
+from astrobot_core.sinastria import sinastria as calcola_sinastria
+from astrobot_core.transiti import (
+    calcola_transiti_data_fissa,
+    transiti_su_due_date,
+)
 
 app = FastAPI(title="AstroBot v13", version="13.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # restringi se vuoi
+    allow_origins=["*"],   # restringi se necessario
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --------------------------- ROOT ---------------------------
 
 @app.get("/", tags=["Root"])
 def root():
     return {"status": "ok", "message": "AstroBot v13 online 🪐"}
-
 
 # --------------------------- TEMA ---------------------------
 
@@ -59,7 +53,7 @@ async def tema(request: Request):
         if not all([citta, data, ora_str]):
             raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
 
-        # Parsing flessibile della data (unisce data + ora)
+        # Parsing flessibile della data
         dt = None
         for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
             try:
@@ -67,7 +61,6 @@ async def tema(request: Request):
                 break
             except ValueError:
                 continue
-
         if not dt:
             raise HTTPException(
                 status_code=422,
@@ -77,7 +70,7 @@ async def tema(request: Request):
         giorno, mese, anno = dt.day, dt.month, dt.year
         ora_i, minuti = dt.hour, dt.minute
 
-        # Calcoli astronomici (le tue funzioni accettano 'citta' direttamente)
+        # Calcoli astronomici (dal core)
         asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
         pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora_i, minuti)
         pianeti_decod = decodifica_segni(pianeti_raw)
@@ -110,14 +103,10 @@ async def tema(request: Request):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
 # --------------------------- STATUS ---------------------------
 
 @app.get("/status", tags=["Diagnostica"], summary="Self-test servizi e dipendenze")
 async def status_check():
-    """
-    Test diagnostico: verifica disponibilità di servizi e dipendenze.
-    """
     results = {}
     try:
         # Effemeridi
@@ -134,7 +123,7 @@ async def status_check():
         except Exception as e:
             results["calcolo_pianeti"] = f"❌ errore: {e}"
 
-        # Geocoding + fuso (se disponibile nel tuo core)
+        # Geocoding + fuso (se disponibile nel core)
         try:
             from astrobot_core.calcoli import geocodifica_citta_con_fuso
             info = geocodifica_citta_con_fuso("Napoli", 1986, 7, 19, 8, 50)
@@ -164,7 +153,6 @@ async def status_check():
     except Exception as e:
         return {"status": "error", "message": str(e), "results": results}
 
-
 # --------------------------- TRANSITI (data fissa) ---------------------------
 
 class TransitiReq(BaseModel):
@@ -174,7 +162,8 @@ class TransitiReq(BaseModel):
     ora: int = 12
     minuti: int = 0
     citta: Optional[str] = None
-
+    include_node: bool = True
+    include_lilith: bool = True
 
 @app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (POST)")
 def transiti_post(req: TransitiReq):
@@ -184,9 +173,10 @@ def transiti_post(req: TransitiReq):
         anno=req.anno,
         ora=req.ora,
         minuti=req.minuti,
-        citta=req.citta
+        citta=req.citta,
+        include_node=req.include_node,
+        include_lilith=req.include_lilith
     )
-
 
 @app.get("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (GET)")
 def transiti_get(
@@ -195,7 +185,9 @@ def transiti_get(
     anno: int,
     ora: int = 12,
     minuti: int = 0,
-    citta: Optional[str] = None
+    citta: Optional[str] = None,
+    include_node: bool = True,
+    include_lilith: bool = True
 ):
     return calcola_transiti_data_fissa(
         giorno=giorno,
@@ -203,9 +195,10 @@ def transiti_get(
         anno=anno,
         ora=ora,
         minuti=minuti,
-        citta=citta
+        citta=citta,
+        include_node=include_node,
+        include_lilith=include_lilith
     )
-
 
 # --------------------------- SINASTRIA ---------------------------
 
@@ -214,11 +207,8 @@ async def api_sinastria(payload: dict = Body(...)):
     """
     Payload:
     {
-      "A": {"data": "1986-07-19", "ora": "10:30", "lat": 45.4642, "lon": 9.19, "fuso_orario": 1.0},
-      "B": {"data": "1990-01-01", "ora": "15:00", "lat": 40.8518, "lon": 14.2681, "fuso_orario": 1.0},
-      "include_node": true,
-      "include_lilith": true,
-      "sistema_case": "equal"
+      "A": {"data": "1986-07-19", "ora": "10:30", "citta": "Milano, IT"},
+      "B": {"data": "1990-01-01", "ora": "15:00", "citta": "Napoli, IT"}
     }
     """
     try:
@@ -230,31 +220,22 @@ async def api_sinastria(payload: dict = Body(...)):
             if not data:
                 raise ValueError("Campo 'data' mancante")
             ora = side.get("ora", "00:00") or "00:00"
-            lat = float(side["lat"])
-            lon = float(side["lon"])
-            fuso = float(side.get("fuso_orario", 0.0))
+            citta = side.get("citta")
+            if not citta:
+                raise ValueError("Campo 'citta' mancante")
             dt = datetime.strptime(f"{data} {ora}", "%Y-%m-%d %H:%M")
-            return dt, lat, lon, fuso
+            return dt, citta
 
-        dtA, latA, lonA, fusoA = parse_side(A)
-        dtB, latB, lonB, fusoB = parse_side(B)
+        dtA, cittaA = parse_side(A)
+        dtB, cittaB = parse_side(B)
 
-        include_node = bool(payload.get("include_node", True))
-        include_lilith = bool(payload.get("include_lilith", True))
-        sistema_case = payload.get("sistema_case", "equal")
-
-        result = calcola_sinastria(
-            dtA, latA, lonA, fusoA,
-            dtB, latB, lonB, fusoB,
-            include_node, include_lilith, sistema_case
-        )
+        result = calcola_sinastria(dtA, cittaA, dtB, cittaB)
         return {"status": "ok", "result": result}
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
 
-
-# --------------------------- TRANSITI SU DUE DATE (opzionale) ---------------------------
+# --------------------------- TRANSITI SU DUE DATE ---------------------------
 
 @app.post("/transiti-intervallo", tags=["Transiti"], summary="Confronta aspetti tra due date (persistono/entrano/escono)")
 async def transiti_intervallo(payload: dict = Body(...)):
@@ -269,9 +250,6 @@ async def transiti_intervallo(payload: dict = Body(...)):
       "include_lilith": true
     }
     """
-    if transiti_su_due_date is None:
-        raise HTTPException(status_code=501, detail="Funzione transiti_su_due_date non disponibile nel modulo 'transiti'.")
-
     try:
         din = payload.get("data_inizio")
         dfi = payload.get("data_fine")
@@ -292,5 +270,3 @@ async def transiti_intervallo(payload: dict = Body(...)):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
-
-
