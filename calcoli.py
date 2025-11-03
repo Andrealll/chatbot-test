@@ -8,6 +8,8 @@ import pytz
 from skyfield.api import load
 
 
+
+
 # ======================================================
 # CARICAMENTO EFFEMERIDI ROBUSTO
 # ======================================================
@@ -251,7 +253,158 @@ def decodifica_segni(pianeti_dict: dict) -> dict:
             "retrogrado": retro
         }
     return out
+# =========================
+# Transiti su data fissa
+# =========================
+from typing import Dict, List, Tuple, Optional
+import math
 
+# Se questo file è separato, importa ciò che hai già:
+# from calcoli import df_tutti, calcola_pianeti_da_df, calcola_asc_mc_case
+
+_ASPECT_SPEC = {
+    "congiunzione": {"angles": [0],         "orb": 6},
+    "opposizione":  {"angles": [180],       "orb": 6},
+    "trigono":      {"angles": [120, 240],  "orb": 4},
+    "quadratura":   {"angles": [90, 270],   "orb": 4},
+}
+
+def _ang_delta(a: float, b: float) -> float:
+    """
+    Ritorna la separazione direzionale (0..360) tra a e b (in gradi).
+    delta = (b - a) mod 360.
+    """
+    d = (b - a) % 360.0
+    return d
+
+def _circular_dist(x: float, target: float) -> float:
+    """
+    Distanza circolare minima in gradi tra un angolo x e un angolo 'target'.
+    """
+    diff = abs((x - target) % 360.0)
+    return min(diff, 360.0 - diff)
+
+def _match_aspect(delta: float) -> Optional[Tuple[str, float]]:
+    """
+    Dato delta in [0, 360), ritorna (tipo_aspetto, orb) se cade in una
+    delle finestre specificate; altrimenti None.
+    L'orb è la distanza dall'angolo esatto dell'aspetto.
+    """
+    for tipo, spec in _ASPECT_SPEC.items():
+        orb = spec["orb"]
+        for ang in spec["angles"]:
+            if _circular_dist(delta, ang) <= orb:
+                return tipo, _circular_dist(delta, ang)
+    return None
+
+def calcola_transiti_data_fissa(
+    giorno: int,
+    mese: int,
+    anno: int,
+    ora: int = 12,
+    minuti: int = 0,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    fuso_orario: float = 0.0,
+    sistema_case: str = "equal",
+    include_extras: Tuple[str, ...] = ("Nodo", "Lilith"),
+    usa_df: bool = True,
+) -> Dict:
+    """
+    Calcola posizioni planetarie, ASC/MC/case per una data/ora e rileva i transiti
+    planetari del giorno tra tutte le coppie di pianeti.
+
+    Parametri
+    ---------
+    giorno, mese, anno : int
+    ora, minuti        : int
+    lat, lon           : float opzionali (necessari per ASC/MC/case)
+    fuso_orario        : float (es. +1.0 per CET senza DST; gestisci come nel tuo progetto)
+    sistema_case       : 'equal', 'placidus', ecc. (come implementato nel tuo calcolo case)
+    include_extras     : tuple di corpi extra da includere se presenti nei tuoi dati
+    usa_df             : se True usa calcola_pianeti_da_df/ephemeridi; in alternativa
+                         puoi agganciare qui un calcolo Skyfield
+
+    Ritorna
+    -------
+    dict con:
+      - 'data'   : stringa ISO-like
+      - 'ASC', 'MC', 'case'
+      - 'pianeti': dict {nome: longitudine (0..360)}
+      - 'aspetti': lista di dict con chiavi:
+            'pianeta1', 'pianeta2', 'tipo', 'delta', 'orb'
+        dove:
+          - delta è (long2 - long1) mod 360 (0..360)
+          - orb è la distanza dall’angolo esatto dell’aspetto
+    """
+    # 1) Posizioni planetarie
+    if usa_df:
+        long_pianeti = calcola_pianeti_da_df(
+            df_tutti, giorno, mese, anno, colonne_extra=include_extras
+        )
+    else:
+        # Se hai un tuo calcolo Skyfield, aggancialo qui:
+        # long_pianeti = calcola_pianeti_skyfield(giorno, mese, anno, ora, minuti, include_extras=include_extras)
+        raise NotImplementedError("Imposta usa_df=True o implementa il ramo Skyfield.")
+
+    # Pulizia NaN e cast a float
+    long_pianeti = {k: float(v) for k, v in long_pianeti.items() if v == v}
+
+    # 2) ASC / MC / Case (se lat/lon sono forniti)
+    asc = mc = case = None
+    if lat is not None and lon is not None:
+        # Tenta con keyword per compatibilità con la tua firma
+        try:
+            res = calcola_asc_mc_case(
+                giorno=giorno, mese=mese, anno=anno,
+                ora=ora, minuti=minuti,
+                lat=lat, lon=lon,
+                fuso_orario=fuso_orario,
+                sistema_case=sistema_case
+            )
+        except TypeError:
+            # Fallback ad una possibile firma alternativa (adatta se necessario)
+            res = calcola_asc_mc_case(lat, lon, giorno, mese, anno, ora, minuti, fuso_orario, sistema_case)
+
+        if isinstance(res, dict):
+            asc, mc, case = res.get("ASC"), res.get("MC"), res.get("case")
+        else:
+            # supponiamo una tupla (asc, mc, case)
+            asc, mc, case = res
+
+    # 3) Aspetti (transiti del giorno tra pianeti)
+    # Ordine chiavi per non duplicare (p1, p2) e (p2, p1)
+    pianeti = list(long_pianeti.keys())
+    aspetti: List[Dict] = []
+
+    for i in range(len(pianeti)):
+        p1 = pianeti[i]
+        for j in range(i + 1, len(pianeti)):
+            p2 = pianeti[j]
+            delta = _ang_delta(long_pianeti[p1], long_pianeti[p2])  # 0..360
+            match = _match_aspect(delta)
+            if match:
+                tipo, orb = match
+                aspetti.append({
+                    "pianeta1": p1,
+                    "pianeta2": p2,
+                    "tipo": tipo,
+                    "delta": round(delta, 3),
+                    "orb": round(orb, 3),
+                })
+
+    # Ordina per tipo e orb crescente
+    ordine_tipo = {"congiunzione": 0, "opposizione": 1, "trigono": 2, "quadratura": 3}
+    aspetti.sort(key=lambda x: (ordine_tipo.get(x["tipo"], 99), x["orb"]))
+
+    return {
+        "data": f"{anno:04d}-{mese:02d}-{giorno:02d} {ora:02d}:{minuti:02d}",
+        "ASC": asc,
+        "MC": mc,
+        "case": case,
+        "pianeti": long_pianeti,
+        "aspetti": aspetti,
+    }
 
 # ======================================================
 # GENERAZIONE IMMAGINE
