@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
 import time
 
 from astrobot_core.calcoli import (
@@ -11,6 +13,7 @@ from astrobot_core.calcoli import (
     genera_carta_base64
 )
 from astrobot_core.metodi import interpreta_groq
+from transiti import calcola_transiti_data_fissa
 
 
 app = FastAPI(title="AstroBot v13", version="13.0")
@@ -41,7 +44,7 @@ async def tema(request: Request):
         if not all([citta, data, ora_str]):
             raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
 
-        # === Parsing flessibile della data ===
+        # Parsing flessibile della data (unisce data + ora)
         dt = None
         for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%d/%m/%Y %H:%M"):
             try:
@@ -53,19 +56,19 @@ async def tema(request: Request):
         if not dt:
             raise HTTPException(
                 status_code=422,
-                detail="Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY."
+                detail="Formato data non riconosciuto. Usa YYYY-MM-DD o DD/MM/YYYY con ora HH:MM."
             )
 
         giorno, mese, anno = dt.day, dt.month, dt.year
         ora_i, minuti = dt.hour, dt.minute
 
-        # === Calcoli astronomici ===
+        # Calcoli astronomici
         asc = calcola_asc_mc_case(citta, anno, mese, giorno, ora_i, minuti)
         pianeti_raw = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora_i, minuti)
         pianeti_decod = decodifica_segni(pianeti_raw)
         img_b64 = genera_carta_base64(anno, mese, giorno, ora_i, minuti, citta)
 
-        # === Interpretazione AI ===
+        # Interpretazione AI
         interpretazione_data = interpreta_groq(
             asc=asc,
             pianeti_decod=pianeti_decod,
@@ -87,8 +90,8 @@ async def tema(request: Request):
             "elapsed_ms": elapsed
         }
 
-    except HTTPException as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -103,13 +106,13 @@ async def status_check():
 
     results = {}
     try:
-        # 1️⃣ Effemeridi
+        # Effemeridi
         if df_tutti is None or df_tutti.empty:
             results["effemeridi"] = "❌ non caricate"
         else:
             results["effemeridi"] = f"✅ {len(df_tutti)} righe caricate"
 
-        # 2️⃣ Calcolo rapido pianeti
+        # Calcolo rapido pianeti
         try:
             pianeti = calcola_pianeti_da_df(df_tutti, 19, 7, 1986, 8, 50)
             sole = pianeti.get("Sole", {})
@@ -117,20 +120,21 @@ async def status_check():
         except Exception as e:
             results["calcolo_pianeti"] = f"❌ errore: {e}"
 
-        # 3️⃣ Geocoding (offline o online)
+        # Geocoding
         try:
             info = geocodifica_citta_con_fuso("Napoli", 1986, 7, 19, 8, 50)
             results["geocodifica"] = f"✅ {info['lat']}, {info['lon']} ({info['timezone']})"
         except Exception as e:
             results["geocodifica"] = f"❌ errore: {e}"
 
-        # 4️⃣ Test AI Groq
+        # Test AI Groq
         try:
             import os
             if os.environ.get("GROQ_API_KEY"):
-                response = call_ai_model([
-                    {"role": "user", "content": "Scrivi 'ok'."}
-                ], max_tokens=10)
+                response = call_ai_model(
+                    [{"role": "user", "content": "Scrivi 'ok'."}],
+                    max_tokens=10
+                )
                 if "ok" in response.lower():
                     results["AI_Groq"] = "✅ risposta corretta"
                 else:
@@ -140,29 +144,13 @@ async def status_check():
         except Exception as e:
             results["AI_Groq"] = f"❌ errore: {e}"
 
-        return {
-            "status": "ok",
-            "message": "Self-test completato",
-            "results": results
-        }
+        return {"status": "ok", "message": "Self-test completato", "results": results}
 
     except Exception as e:
         return {"status": "error", "message": str(e), "results": results}
- 
-# --- imports già presenti ---
-# from fastapi import FastAPI, Request, HTTPException
-# ...
-# from calcoli import df_tutti, calcola_asc_mc_case, calcola_pianeti_da_df, decodifica_segni, genera_carta_base64
-# from metodi import interpreta_groq
 
-# importa la funzione dove l'hai messa (transiti.py o calcoli.py)
-try:
-    from transiti import calcola_transiti_data_fissa
-except ImportError:
-    from calcoli import calcola_transiti_data_fissa
 
-from pydantic import BaseModel
-from typing import List, Optional
+# --------- Transiti: modelli e rotte ---------
 
 class TransitiReq(BaseModel):
     giorno: int
@@ -170,24 +158,35 @@ class TransitiReq(BaseModel):
     anno: int
     ora: int = 12
     minuti: int = 0
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    fuso_orario: float = 0.0
-    sistema_case: str = "equal"
-    include_extras: List[str] = ["Nodo", "Lilith"]
+    citta: Optional[str] = None
 
-@app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa")
-def transiti(req: TransitiReq):
+
+@app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (POST)")
+def transiti_post(req: TransitiReq):
     return calcola_transiti_data_fissa(
         giorno=req.giorno,
         mese=req.mese,
         anno=req.anno,
         ora=req.ora,
         minuti=req.minuti,
-        lat=req.lat,
-        lon=req.lon,
-        fuso_orario=req.fuso_orario,
-        sistema_case=req.sistema_case,
-        include_extras=tuple(req.include_extras or []),
-        usa_df=True,
+        citta=req.citta
+    )
+
+
+@app.get("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (GET)")
+def transiti_get(
+    giorno: int,
+    mese: int,
+    anno: int,
+    ora: int = 12,
+    minuti: int = 0,
+    citta: Optional[str] = None
+):
+    return calcola_transiti_data_fissa(
+        giorno=giorno,
+        mese=mese,
+        anno=anno,
+        ora=ora,
+        minuti=minuti,
+        citta=citta
     )
