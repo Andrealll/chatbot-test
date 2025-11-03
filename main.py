@@ -190,3 +190,53 @@ def transiti_get(
         minuti=minuti,
         citta=citta
     )
+
+
+
+from fastapi import Body, HTTPException
+from datetime import datetime
+
+# from sinastria import sinastria
+
+@app.post("/sinastria")
+async def api_sinastria(payload: dict = Body(...)):
+    """
+    Esempio payload:
+    {
+      "A": {"data": "1986-07-19", "ora": "10:30", "lat": 45.4642, "lon": 9.19, "fuso_orario": 1.0},
+      "B": {"data": "1990-01-01", "ora": "15:00", "lat": 40.8518, "lon": 14.2681, "fuso_orario": 1.0},
+      "include_node": true,
+      "include_lilith": true,
+      "sistema_case": "equal"
+    }
+    """
+    try:
+        A = payload.get("A", {})
+        B = payload.get("B", {})
+
+        def parse_side(side):
+            data = side.get("data")
+            ora = side.get("ora", "00:00") or "00:00"
+            lat = float(side["lat"])
+            lon = float(side["lon"])
+            fuso = float(side.get("fuso_orario", 0.0))
+            dt = datetime.strptime(f"{data} {ora}", "%Y-%m-%d %H:%M")
+            return dt, lat, lon, fuso
+
+        dtA, latA, lonA, fusoA = parse_side(A)
+        dtB, latB, lonB, fusoB = parse_side(B)
+
+        include_node = bool(payload.get("include_node", True))
+        include_lilith = bool(payload.get("include_lilith", True))
+        sistema_case = payload.get("sistema_case", "equal")
+
+        result = sinastria(
+            dtA, latA, lonA, fusoA,
+            dtB, latB, lonB, fusoB,
+            include_node, include_lilith, sistema_case
+        )
+        return {"status": "ok", "result": result}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}" )
+
