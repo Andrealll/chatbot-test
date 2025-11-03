@@ -1,5 +1,48 @@
 # transiti.py
-from typing import Optional, Dict, List, Tuple
+from typing import Any
+
+_NUMERIC_KEYS_PRIOR = ("lon", "long", "longitudine", "lambda", "ecl_lon", "gradi", "degree", "deg", "angle", "pos")
+
+def _to_float(x: Any):
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        s = x.strip().replace("°", "").replace(",", ".")
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
+
+def _extract_degree(val: Any):
+    """
+    Estrae una longitudine (0..360) da:
+    - numero o stringa ("123.4°")
+    - dict (chiavi tipiche: lon/long/longitudine/lambda/ecl_lon/gradi/degree/deg/angle/pos)
+    - lista/tupla (primo valore numerico)
+    """
+    f = _to_float(val)
+    if f is not None:
+        return f % 360.0
+    if isinstance(val, dict):
+        for k in _NUMERIC_KEYS_PRIOR:
+            if k in val:
+                f = _to_float(val[k])
+                if f is not None:
+                    return f % 360.0
+        for v in val.values():
+            f = _to_float(v)
+            if f is not None:
+                return f % 360.0
+        return None
+    if isinstance(val, (list, tuple)):
+        for v in val:
+            f = _to_float(v)
+            if f is not None:
+                return f % 360.0
+    return None
 from astrobot_core.calcoli import (
     df_tutti,
     calcola_pianeti_da_df,   # firma: (df_tutti, giorno, mese, anno, ora, minuti)
