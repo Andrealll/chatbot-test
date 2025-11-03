@@ -1,9 +1,20 @@
 # transiti.py
-from typing import Any
+from typing import Optional, Dict, List, Any
+from astrobot_core.calcoli import (
+    df_tutti,
+    calcola_pianeti_da_df,   # firma: (df_tutti, giorno, mese, anno, ora, minuti)
+    calcola_asc_mc_case      # nel tuo progetto: (citta, anno, mese, giorno, ora, minuti)
+)
 
-_NUMERIC_KEYS_PRIOR = ("lon", "long", "longitudine", "lambda", "ecl_lon", "gradi", "degree", "deg", "angle", "pos")
+# =========================
+# Helper: normalizzazione
+# =========================
+_NUMERIC_KEYS_PRIOR = (
+    "lon", "long", "longitudine", "lambda", "ecl_lon",
+    "gradi", "degree", "deg", "angle", "pos"
+)
 
-def _to_float(x: Any):
+def _to_float(x: Any) -> Optional[float]:
     if x is None:
         return None
     if isinstance(x, (int, float)):
@@ -16,40 +27,42 @@ def _to_float(x: Any):
             return None
     return None
 
-def _extract_degree(val: Any):
+def _extract_degree(val: Any) -> Optional[float]:
     """
-    Estrae una longitudine (0..360) da:
+    Estrae longitudine (0..360) da:
     - numero o stringa ("123.4°")
     - dict (chiavi tipiche: lon/long/longitudine/lambda/ecl_lon/gradi/degree/deg/angle/pos)
-    - lista/tupla (primo valore numerico)
+    - lista/tupla (primo valore numerico plausibile)
     """
     f = _to_float(val)
     if f is not None:
         return f % 360.0
+
     if isinstance(val, dict):
+        # prova chiavi più comuni
         for k in _NUMERIC_KEYS_PRIOR:
             if k in val:
                 f = _to_float(val[k])
                 if f is not None:
                     return f % 360.0
+        # altrimenti, primo valore numerico plausibile
         for v in val.values():
             f = _to_float(v)
             if f is not None:
                 return f % 360.0
         return None
+
     if isinstance(val, (list, tuple)):
         for v in val:
             f = _to_float(v)
             if f is not None:
                 return f % 360.0
-    return None
-from astrobot_core.calcoli import (
-    df_tutti,
-    calcola_pianeti_da_df,   # firma: (df_tutti, giorno, mese, anno, ora, minuti)
-    calcola_asc_mc_case      # nel tuo progetto accetta: (citta, anno, mese, giorno, ora, minuti)
-)
 
-# ---- specifiche aspetti (come richiesto) ----
+    return None
+
+# =========================
+# Spec aspetti
+# =========================
 _ASPECT_SPEC = {
     "congiunzione": {"angles": [0],         "orb": 6},
     "opposizione":  {"angles": [180],       "orb": 6},
@@ -62,15 +75,12 @@ def _ang_delta(a: float, b: float) -> float:
     return (b - a) % 360.0
 
 def _circular_dist(x: float, target: float) -> float:
-    """Distanza circolare minima tra x e target su circonferenza (0..180)."""
+    """Distanza circolare minima tra x e target (0..180)."""
     diff = abs((x - target) % 360.0)
     return min(diff, 360.0 - diff)
 
 def _match_aspect(delta: float):
-    """
-    Se delta cade in una finestra d'aspetto ritorna (tipo, orb) altrimenti None.
-    orb = distanza dall'angolo esatto dell'aspetto.
-    """
+    """Se delta ricade in una finestra d’aspetto, ritorna (tipo, orb); altrimenti None."""
     for tipo, spec in _ASPECT_SPEC.items():
         orb = spec["orb"]
         for ang in spec["angles"]:
@@ -79,6 +89,9 @@ def _match_aspect(delta: float):
                 return tipo, d
     return None
 
+# =========================
+# Funzione pubblica
+# =========================
 def calcola_transiti_data_fissa(
     giorno: int,
     mese: int,
@@ -88,19 +101,29 @@ def calcola_transiti_data_fissa(
     citta: Optional[str] = None,
 ) -> Dict:
     """
-    Calcola: posizioni planetarie (longitudini 0..360), ASC/MC/Case (se 'citta' è fornita),
-    e aspetti (congiunzione/opposizione/trigono/quadratura) tra tutte le coppie di pianeti.
-    Non modifica né rimpiazza i tuoi metodi esistenti.
+    Calcola:
+      - posizioni planetarie (longitudini 0..360)
+      - ASC/MC/Case (se 'citta' è fornita)
+      - aspetti tra tutte le coppie di pianeti (senza duplicati)
     """
     if df_tutti is None or getattr(df_tutti, "empty", False):
         raise RuntimeError("Effemeridi non caricate correttamente (df_tutti è vuoto o None).")
 
     # 1) Pianeti (usa la tua firma con ora/minuti)
-    long_pianeti = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
-    long_pianeti = {
-        k: float(v) for k, v in long_pianeti.items()
-        if v is not None and v == v
-    }
+    raw_pianeti = calcola_pianeti_da_df(df_tutti, giorno, mese, anno, ora, minuti)
+
+    # Normalizza in {nome: gradi_float}
+    long_pianeti: Dict[str, float] = {}
+    scartati: List[str] = []
+    for nome, val in raw_pianeti.items():
+        deg = _extract_degree(val)
+        if deg is None:
+            scartati.append(nome)
+        else:
+            long_pianeti[nome] = deg
+
+    if not long_pianeti:
+        raise ValueError("Nessuna longitudine numerica ricavata da calcola_pianeti_da_df (formato inatteso).")
 
     # 2) ASC/MC/Case (solo se ho la città, coerente con /tema)
     asc_mc_case = None
@@ -110,7 +133,7 @@ def calcola_transiti_data_fissa(
         except Exception as e:
             asc_mc_case = {"errore": f"calcola_asc_mc_case: {e}"}
 
-    # 3) Aspetti tra pianeti (niente duplicati p1-p2)
+    # 3) Aspetti (no duplicati p1-p2)
     pianeti = list(long_pianeti.keys())
     aspetti: List[Dict] = []
     for i in range(len(pianeti)):
@@ -129,13 +152,20 @@ def calcola_transiti_data_fissa(
                     "orb": round(orb, 3),
                 })
 
-    # ordina per tipo e orb crescente
+    # Ordina per tipo e orb crescente
     ordine_tipo = {"congiunzione": 0, "opposizione": 1, "trigono": 2, "quadratura": 3}
     aspetti.sort(key=lambda x: (ordine_tipo.get(x["tipo"], 99), x["orb"]))
 
+    # Meta diagnostica: cosa non sono riuscito a leggere
+    meta: Dict[str, Any] = {}
+    if scartati:
+        meta["pianeti_scartati"] = scartati
+
     return {
         "data": f"{anno:04d}-{mese:02d}-{giorno:02d} {ora:02d}:{minuti:02d}",
-        "asc_mc_case": asc_mc_case,   # è il risultato integro della tua funzione
-        "pianeti": long_pianeti,      # es. {"Sole": 123.4, ...}
-        "aspetti": aspetti            # lista di aspetti trovati
+        "asc_mc_case": asc_mc_case,
+        "pianeti": long_pianeti,
+        "aspetti": aspetti,
+        "meta": meta
     }
+
