@@ -9,3 +9,4 @@ timezonefinder
 pytz
 groq
 openpyxl
+aioredis
