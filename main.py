@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
 from datetime import datetime
 import time
 import os
@@ -19,12 +19,41 @@ from astrobot_core.metodi import interpreta_groq
 # ---- CORE: sinastria & transiti ----
 from astrobot_core.sinastria import sinastria as calcola_sinastria
 
-# transiti_su_due_date potrebbe non esistere in alcune build del package
+# transiti: import best-effort (alcune funzioni potrebbero non esistere in alcune build)
+calcola_transiti_data_fissa = None
+transiti_su_due_date = None
+transiti_vs_natal_in_data = None
+transiti_oggi = None
+transiti_su_periodo = None
 try:
-    from astrobot_core.transiti import calcola_transiti_data_fissa, transiti_su_due_date
-except ImportError:
-    from astrobot_core.transiti import calcola_transiti_data_fissa
-    transiti_su_due_date = None
+    from astrobot_core.transiti import calcola_transiti_data_fissa as _ctdf
+    calcola_transiti_data_fissa = _ctdf
+except Exception:
+    pass
+
+try:
+    from astrobot_core.transiti import transiti_su_due_date as _tsdd
+    transiti_su_due_date = _tsdd
+except Exception:
+    pass
+
+try:
+    from astrobot_core.transiti import transiti_vs_natal_in_data as _tvnid
+    transiti_vs_natal_in_data = _tvnid
+except Exception:
+    pass
+
+try:
+    from astrobot_core.transiti import transiti_oggi as _toggi
+    transiti_oggi = _toggi
+except Exception:
+    pass
+
+try:
+    from astrobot_core.transiti import transiti_su_periodo as _tperiodo
+    transiti_su_periodo = _tperiodo
+except Exception:
+    pass
 
 # ====================== AGGIUNTE (minime) ======================
 # Supabase server-side (opzionale: usato dai router demo se necessario)
@@ -211,6 +240,8 @@ class TransitiReq(BaseModel):
 
 @app.post("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (POST)")
 def transiti_post(req: TransitiReq):
+    if calcola_transiti_data_fissa is None:
+        raise HTTPException(status_code=501, detail="Funzione calcola_transiti_data_fissa non disponibile.")
     return calcola_transiti_data_fissa(
         giorno=req.giorno,
         mese=req.mese,
@@ -233,6 +264,8 @@ def transiti_get(
     include_node: bool = True,
     include_lilith: bool = True
 ):
+    if calcola_transiti_data_fissa is None:
+        raise HTTPException(status_code=501, detail="Funzione calcola_transiti_data_fissa non disponibile.")
     return calcola_transiti_data_fissa(
         giorno=giorno,
         mese=mese,
@@ -315,3 +348,124 @@ async def transiti_intervallo(payload: dict = Body(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
+
+# --------------------------- TRANSITI: VS NATALE (nuovi) ---------------------------
+
+class TransitiVsNatalReq(BaseModel):
+    citta: str = Field(..., description="Es. 'Napoli, IT'")
+    data: str = Field(..., description="Data di nascita YYYY-MM-DD")
+    ora: str = Field(..., description="Ora di nascita HH:MM (24h)")
+    quando: Optional[str] = Field(None, description="Data/ora transito (YYYY-MM-DD o YYYY-MM-DD HH:MM). Se omesso, usa /transiti-oggi.")
+    include_node: bool = True
+    include_lilith: bool = True
+    filtra_transito: Optional[List[str]] = None
+    filtra_natal: Optional[List[str]] = None
+
+def _parse_quando(s: Optional[str]) -> datetime:
+    """Parsa 'quando' con alcuni formati comodi; default=oggi 12:00."""
+    if not s:
+        return datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    # prova diversi formati
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+                dt = dt.replace(hour=12, minute=0)
+            return dt
+        except ValueError:
+            continue
+    raise HTTPException(status_code=422, detail="Formato 'quando' non valido. Usa 'YYYY-MM-DD' o 'YYYY-MM-DD HH:MM'.")
+
+@app.post("/transiti-vs-natal", tags=["Transiti"], summary="Aspetti tra pianeti di transito e tema natale")
+async def api_transiti_vs_natal(req: TransitiVsNatalReq):
+    if transiti_vs_natal_in_data is None:
+        raise HTTPException(status_code=501, detail="Funzione transiti_vs_natal_in_data non disponibile in questa build di astrobot_core.")
+    quando_dt = _parse_quando(req.quando)
+    out = transiti_vs_natal_in_data(
+        citta=req.citta,
+        data_nascita=req.data,
+        ora_nascita=req.ora,
+        quando=quando_dt,
+        include_node=req.include_node,
+        include_lilith=req.include_lilith,
+        filtra_transito=req.filtra_transito,
+        filtra_natal=req.filtra_natal,
+    )
+    return {"status": "ok", "result": out}
+
+class TransitiOggiReq(BaseModel):
+    citta: str
+    data: str  # YYYY-MM-DD
+    ora: str   # HH:MM
+    include_node: bool = True
+    include_lilith: bool = True
+    filtra_transito: Optional[List[str]] = None
+    filtra_natal: Optional[List[str]] = None
+
+@app.post("/transiti-oggi", tags=["Transiti"], summary="Aspetti transiti di oggi (ore 12:00) vs tema natale")
+async def api_transiti_oggi(req: TransitiOggiReq):
+    if transiti_oggi is None:
+        # fallback gentile: prova /transiti-vs-natal con quando=oggi
+        if transiti_vs_natal_in_data is None:
+            raise HTTPException(status_code=501, detail="Funzione transiti_oggi/transiti_vs_natal_in_data non disponibile.")
+        quando_dt = _parse_quando(None)
+        out = transiti_vs_natal_in_data(
+            citta=req.citta,
+            data_nascita=req.data,
+            ora_nascita=req.ora,
+            quando=quando_dt,
+            include_node=req.include_node,
+            include_lilith=req.include_lilith,
+            filtra_transito=req.filtra_transito,
+            filtra_natal=req.filtra_natal,
+        )
+        return {"status": "ok", "result": out}
+
+    out = transiti_oggi(
+        citta=req.citta,
+        data_nascita=req.data,
+        ora_nascita=req.ora,
+        include_node=req.include_node,
+        include_lilith=req.include_lilith,
+        filtra_transito=req.filtra_transito,
+        filtra_natal=req.filtra_natal,
+    )
+    return {"status": "ok", "result": out}
+
+# --------------------------- TRANSITI: PERIODO (nuovo, se presente) ---------------------------
+
+class TransitiPeriodoRequest(BaseModel):
+    citta: str = Field(..., description="Es. 'Milano, IT'")
+    data: str = Field(..., description="Data di nascita YYYY-MM-DD")
+    ora: str = Field(..., description="Ora di nascita HH:MM (24h)")
+    start: str = Field(..., description="Inizio periodo YYYY-MM-DD")
+    end: str = Field(..., description="Fine periodo YYYY-MM-DD")
+    step_days: int = 1
+    aspetti: Optional[List[str]] = None
+    orb: Optional[Dict[str, float]] = None
+    include_node: bool = True
+    include_lilith: bool = True
+    filtra_transito: Optional[List[str]] = None
+    filtra_natal: Optional[List[str]] = None
+
+@app.post("/transiti-periodo", tags=["Transiti"], summary="Transiti vs tema natale su un periodo (giornaliero)")
+async def api_transiti_periodo(body: TransitiPeriodoRequest):
+    if transiti_su_periodo is None:
+        raise HTTPException(status_code=501, detail="Funzione transiti_su_periodo non disponibile nella versione attuale di astrobot_core.")
+    out = transiti_su_periodo(
+        citta=body.citta,
+        data_nascita=body.data,
+        ora_nascita=body.ora,
+        start=body.start,
+        end=body.end,
+        step_days=body.step_days,
+        aspetti=body.aspetti,
+        orb=body.orb,
+        include_node=body.include_node,
+        include_lilith=body.include_lilith,
+        filtra_transito=body.filtra_transito,
+        filtra_natal=body.filtra_natal,
+    )
+    if out.get("status") != "ok":
+        return {"status": "error", "detail": out}
+    return out
