@@ -10,3 +10,4 @@ pytz
 groq
 openpyxl
 aioredis
+Pillow
