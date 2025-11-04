@@ -252,4 +252,66 @@ async def api_sinastria(payload: dict = Body(...)):
     Payload:
     {
       "A": {"data": "1986-07-19", "ora": "10:30", "citta": "Milano, IT"},
-      "B
+      "B": {"data": "1988-11-11", "ora": "07:30", "citta": "Napoli, IT"}
+    }
+    """
+    try:
+        A = payload.get("A", {})
+        B = payload.get("B", {})
+
+        def parse_side(side):
+            data = side.get("data")
+            if not data:
+                raise ValueError("Campo 'data' mancante (A/B)")
+            ora = side.get("ora", "00:00") or "00:00"
+            citta = side.get("citta")
+            if not citta:
+                raise ValueError("Campo 'citta' mancante (A/B)")
+            dt = datetime.strptime(f"{data} {ora}", "%Y-%m-%d %H:%M")
+            return dt, citta
+
+        dtA, cittaA = parse_side(A)
+        dtB, cittaB = parse_side(B)
+
+        result = calcola_sinastria(dtA, cittaA, dtB, cittaB)  # sinastria del core (città-based)
+        return {"status": "ok", "result": result}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
+
+# --------------------------- TRANSITI: confronto due date ---------------------------
+
+@app.post("/transiti-intervallo", tags=["Transiti"], summary="Confronta aspetti tra due date (persistono/entrano/escono)")
+async def transiti_intervallo(payload: dict = Body(...)):
+    """
+    Payload:
+    {
+      "data_inizio": "1986-07-19", "ora_inizio": "10:30",
+      "data_fine":   "1986-07-26", "ora_fine":   "12:00",
+      "include_node": true, "include_lilith": true
+    }
+    """
+    try:
+        if transiti_su_due_date is None:
+            raise HTTPException(status_code=501, detail="Funzione transiti_su_due_date non disponibile nella versione attuale di astrobot_core.")
+
+        din = payload.get("data_inizio")
+        dfi = payload.get("data_fine")
+        if not din or not dfi:
+            raise ValueError("Campi 'data_inizio' e 'data_fine' obbligatori")
+
+        oin = payload.get("ora_inizio", "00:00") or "00:00"
+        ofi = payload.get("ora_fine", "00:00") or "00:00"
+        include_node = bool(payload.get("include_node", True))
+        include_lilith = bool(payload.get("include_lilith", True))
+
+        dt_start = datetime.strptime(f"{din} {oin}", "%Y-%m-%d %H:%M")
+        dt_end   = datetime.strptime(f"{dfi} {ofi}", "%Y-%m-%d %H:%M")
+
+        result = transiti_su_due_date(dt_start, dt_end, include_node, include_lilith)
+        return {"status": "ok", "result": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
