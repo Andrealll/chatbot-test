@@ -26,6 +26,33 @@ except ImportError:
     from astrobot_core.transiti import calcola_transiti_data_fissa
     transiti_su_due_date = None
 
+# ====================== AGGIUNTE (minime) ======================
+# Supabase server-side (opzionale: usato dai router demo se necessario)
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = os.environ.get("SUPABASE_URL")
+    SUPABASE_SERVICE_ROLE = os.environ.get("SUPABASE_SERVICE_ROLE")
+    supabase: "Client | None" = (
+        create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+        if SUPABASE_URL and SUPABASE_SERVICE_ROLE else None
+    )
+except Exception:
+    supabase = None  # proseguiamo anche senza Supabase
+
+# Rate limit (Redis) startup
+try:
+    from ratelimit import rl_startup
+except Exception:
+    rl_startup = None  # se non presente, nessun errore
+
+# Router DEMO (senza login) con quota giornaliera
+# (richiede routes_demo.py con build_demo_router)
+try:
+    from routes_demo import build_demo_router
+except Exception:
+    build_demo_router = None
+# ===============================================================
+
 app = FastAPI(title="AstroBot v13", version="13.0")
 
 app.add_middleware(
@@ -35,6 +62,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ====================== AGGIUNTE (minime) ======================
+# Monta il router /demo solo se disponibile
+if build_demo_router is not None:
+    app.include_router(build_demo_router(supabase), tags=["Demo"])
+
+# Inizializza Redis rate-limit se disponibile
+@app.on_event("startup")
+async def _startup():
+    if rl_startup is not None:
+        await rl_startup()
+# ===============================================================
 
 # --------------------------- ROOT ---------------------------
 
@@ -213,66 +252,4 @@ async def api_sinastria(payload: dict = Body(...)):
     Payload:
     {
       "A": {"data": "1986-07-19", "ora": "10:30", "citta": "Milano, IT"},
-      "B": {"data": "1988-11-11", "ora": "07:30", "citta": "Napoli, IT"}
-    }
-    """
-    try:
-        A = payload.get("A", {})
-        B = payload.get("B", {})
-
-        def parse_side(side):
-            data = side.get("data")
-            if not data:
-                raise ValueError("Campo 'data' mancante (A/B)")
-            ora = side.get("ora", "00:00") or "00:00"
-            citta = side.get("citta")
-            if not citta:
-                raise ValueError("Campo 'citta' mancante (A/B)")
-            dt = datetime.strptime(f"{data} {ora}", "%Y-%m-%d %H:%M")
-            return dt, citta
-
-        dtA, cittaA = parse_side(A)
-        dtB, cittaB = parse_side(B)
-
-        result = calcola_sinastria(dtA, cittaA, dtB, cittaB)  # sinastria del core (città-based)
-        return {"status": "ok", "result": result}
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
-
-# --------------------------- TRANSITI: confronto due date ---------------------------
-
-@app.post("/transiti-intervallo", tags=["Transiti"], summary="Confronta aspetti tra due date (persistono/entrano/escono)")
-async def transiti_intervallo(payload: dict = Body(...)):
-    """
-    Payload:
-    {
-      "data_inizio": "1986-07-19", "ora_inizio": "10:30",
-      "data_fine":   "1986-07-26", "ora_fine":   "12:00",
-      "include_node": true, "include_lilith": true
-    }
-    """
-    try:
-        if transiti_su_due_date is None:
-            raise HTTPException(status_code=501, detail="Funzione transiti_su_due_date non disponibile nella versione attuale di astrobot_core.")
-
-        din = payload.get("data_inizio")
-        dfi = payload.get("data_fine")
-        if not din or not dfi:
-            raise ValueError("Campi 'data_inizio' e 'data_fine' obbligatori")
-
-        oin = payload.get("ora_inizio", "00:00") or "00:00"
-        ofi = payload.get("ora_fine", "00:00") or "00:00"
-        include_node = bool(payload.get("include_node", True))
-        include_lilith = bool(payload.get("include_lilith", True))
-
-        dt_start = datetime.strptime(f"{din} {oin}", "%Y-%m-%d %H:%M")
-        dt_end   = datetime.strptime(f"{dfi} {ofi}", "%Y-%m-%d %H:%M")
-
-        result = transiti_su_due_date(dt_start, dt_end, include_node, include_lilith)
-        return {"status": "ok", "result": result}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Errore input/processing: {e}")
+      "B
