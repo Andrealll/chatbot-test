@@ -57,9 +57,14 @@ def save_base64_png(b64: str, png_path: Path) -> None:
 def _angles_at(when: datetime) -> Dict[str, float]:
     if calcola_pianeti_da_df is None or df_tutti is None:
         raise RuntimeError("astrobot_core.calcoli non disponibile: adatta gli import in adapters.py")
-    return calcola_pianeti_da_df(
-        df_tutti, when.day, when.month, when.year, colonne_extra=("Nodo","Lilith")
-    )
+    # Prova con la firma nuova (con 'colonne_extra'), altrimenti fallback alla firma vecchia
+    try:
+        return calcola_pianeti_da_df(
+            df_tutti, when.day, when.month, when.year, colonne_extra=("Nodo", "Lilith")
+        )
+    except TypeError:
+        # Versione del core senza 'colonne_extra'
+        return calcola_pianeti_da_df(df_tutti, when.day, when.month, when.year)
 
 # === Mock intensities (fallback deterministico, sostituisci con i tuoi transiti) ===
 
