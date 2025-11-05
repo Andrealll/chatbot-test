@@ -1,72 +1,88 @@
-from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-
-
-# === IMPORTA QUI I TUOI METODI REALI ===
-# Esempio (adatta ai tuoi pacchetti/nome funzioni):
-try:
-from astrobot_core.calcoli import (
-df_tutti,
-calcola_pianeti_da_df,
-calcola_asc_mc_case,
-genera_carta_base64,
-)
-from astrobot_core.sinastria import sinastria as calcola_sinastria
-try:
-from astrobot_core.transiti import calcola_transiti_data_fissa, transiti_su_due_date # type: ignore
-except Exception:
-calcola_transiti_data_fissa, transiti_su_due_date = None, None
-except Exception:
-df_tutti = None
-calcola_pianeti_da_df = None
-calcola_asc_mc_case = None
-genera_carta_base64 = None
-calcola_sinastria = None
-calcola_transiti_data_fissa = None
-transiti_su_due_date = None
-
-
-import base64
-from pathlib import Path
-import io
-from PIL import Image
-import numpy as np
-import math
+# ... import dei tuoi metodi come sopra ...
 
 
 @dataclass
-class Place:
-lat: float
-lon: float
-name: str = ""
+class Natal:
+when: datetime
+place: dict # {lat, lon, name}
 
 
-# ---------- UTIL ----------
+# --- helper per ottenere angoli di un datetime ---
 
 
-def save_base64_png(b64: str, png_path: Path) -> None:
-raw = base64.b64decode(b64)
-img = Image.open(io.BytesIO(raw)).convert("RGBA")
+def _angles_at(when: datetime) -> Dict[str, float]:
+return calcola_pianeti_da_df(
+df_tutti, when.day, when.month, when.year, colonne_extra=("Nodo","Lilith")
+)
+
+
+
+
+def compute_oroscopo_daily(when: datetime, place: Place, natal: Natal, png_path: Path) -> Dict[str, Any]:
+angles_transit = _angles_at(when)
+angles_natal = _angles_at(natal.when)
+
+
+# Se hai una funzione reale di transiti tra due date, usala qui
+intensities = None
+if transiti_su_due_date is not None:
+try:
+# TODO: adatta ai parametri reali della tua funzione di transiti
+# Esempio: transiti_su_due_date(natal.when, when, place.lat, place.lon, ...)
+trans = transiti_su_due_date # placeholder, chiama davvero la tua funzione
+# intensities = extract_intensities(trans)
+except Exception:
+pass
+
+
+if intensities is None:
+# Fallback deterministico basato sui gradi dei transiti rispetto al natal
+# (qui usiamo solo angles_transit per semplicità; puoi migliorare con differenze angolari)
+intensities = _mock_intensities_from_angles(angles_transit)
+
+
+# Grafico a barre delle intensità
+import matplotlib.pyplot as plt
+fig = plt.figure()
+ax = fig.add_subplot(111)
+ax.bar(list(intensities.keys()), list(intensities.values()))
+ax.set_ylim(0, 1)
+ax.set_title(f"{when.isoformat()} — natal @ {natal.when.date()}")
 png_path.parent.mkdir(parents=True, exist_ok=True)
-img.save(png_path)
+fig.savefig(png_path, bbox_inches='tight')
+plt.close(fig)
 
 
-# ---------- ADAPTER: TEMA ----------
+return {
+"angles_transit": angles_transit,
+"angles_natal": angles_natal,
+"intensities": intensities,
+}
 
 
-def compute_tema(when: datetime, place: Place, png_path: Path) -> Dict[str, Any]:
-"""Ritorna angles + (eventuali) intensities e salva PNG del grafico polare."""
-if calcola_pianeti_da_df is None:
-raise RuntimeError("astrobot_core non disponibile: adatta gli import in adapters.py")
 
 
-# Pianeti (longitudini eclittiche)
-angles = calcola_pianeti_da_df(
-df_tutti,
-when.day,
-when.month,
-when.year,
-colonne_extra=("Nodo", "Lilith"),
+def compute_oroscopo_period(samples: List[datetime], place: Place, natal: Natal, png_path: Path) -> Dict[str, Any]:
+chunks = []
+tmp = png_path.with_name("__tmp.png")
+for dt in samples:
+r = compute_oroscopo_daily(dt, place, natal, tmp)
+chunks.append(r["intensities"])
+# media per categoria
+agg = {k: float(sum(d[k] for d in chunks)/len(chunks)) for k in CATEGORIES}
+
+
+# chart aggregato
+import matplotlib.pyplot as plt
+fig = plt.figure()
+ax = fig.add_subplot(111)
+ax.bar(list(agg.keys()), list(agg.values()))
+ax.set_ylim(0, 1)
+ax.set_title(f"Aggregazione su {len(samples)} campioni — natal @ {natal.when.date()}")
+png_path.parent.mkdir(parents=True, exist_ok=True)
+fig.savefig(png_path, bbox_inches='tight')
+plt.close(fig)
+
+
 return {"intensities": agg, "n_samples": len(samples)}
