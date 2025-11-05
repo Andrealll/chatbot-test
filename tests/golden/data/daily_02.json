@@ -1,0 +1,37 @@
+{
+  "angles_transit": {
+    "Sole": 116.5986,
+    "Luna": 39.4867,
+    "Mercurio": 135.5492,
+    "Venere": 76.0603,
+    "Marte": 168.3894,
+    "Giove": 98.8739,
+    "Saturno": 1.9058,
+    "Urano": 60.4836,
+    "Nettuno": 2.1225,
+    "Plutone": 302.7372,
+    "Nodo": 349.7728,
+    "Lilith": 241.7131
+  },
+  "angles_natal": {
+    "Sole": 116.0478,
+    "Luna": 261.7969,
+    "Mercurio": 123.3306,
+    "Venere": 158.2653,
+    "Marte": 285.1681,
+    "Giove": 352.7931,
+    "Saturno": 243.3567,
+    "Urano": 258.9886,
+    "Nettuno": 273.8394,
+    "Plutone": 214.5406,
+    "Nodo": 25.4872,
+    "Lilith": 95.32
+  },
+  "intensities": {
+    "energy": 0.34359194444444446,
+    "emotions": 0.6040668658545394,
+    "relationships": 0.5941554045393546,
+    "work": 0.6429754026879209,
+    "luck": 0.9662972222222223
+  }
+}
