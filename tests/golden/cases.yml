@@ -1,56 +1,67 @@
-# Timezone di riferimento
 timezone: "Europe/Rome"
 
 
+# Natal di default (puoi cambiarlo, qui un esempio coerente con i test):
+natal: &natal_default
+when: "1986-07-19T10:30:00"
+place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+
+
 cases:
-# 1) Oroscopo giornaliero — due date
+# ---- Daily (2 casi) ----
 - id: daily_01
 type: daily
-when: "2025-11-05T12:00:00" # oggi alle 12
+when: "2025-11-05T12:00:00"
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+natal: *natal_default
 
 
 - id: daily_02
 type: daily
 when: "2025-07-19T07:00:00"
 place: { lat: 41.9028, lon: 12.4964, name: "Roma" }
+natal: *natal_default
 
 
-# 2) Oroscopo settimanale — due settimane
+# ---- Weekly (2 casi) ----
 - id: weekly_01
 type: weekly
 start: "2025-11-03T12:00:00"
 days: 7
-sample_points: 7 # premium: 1 per giorno
+sample_points: 7
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+natal: *natal_default
 
 
 - id: weekly_02
 type: weekly
 start: "2025-11-10T12:00:00"
 days: 7
-sample_points: 2 # light: mercoledì + sabato
+sample_points: 2
 sampling: ["2025-11-12T12:00:00", "2025-11-15T12:00:00"]
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+natal: *natal_default
 
 
-# 3) Oroscopo mensile — 10 punti
+# ---- Monthly (1 caso) ----
 - id: monthly_01
 type: monthly
 month: "2025-11"
 sample_points: 10
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+natal: *natal_default
 
 
-# 4) Oroscopo annuale — 120 punti (1 ogni 3 giorni)
+# ---- Annual (1 caso) ----
 - id: annual_01
 type: annual
 year: 2026
 sample_points: 120
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
+natal: *natal_default
 
 
-# 5) Tema natale — 1 caso
+# ---- Tema (1 caso) ----
 - id: tema_01
 type: tema
 birth:
@@ -58,7 +69,7 @@ when: "1986-07-19T10:30:00"
 place: { lat: 45.4642, lon: 9.1896, name: "Milano" }
 
 
-# 6) Sinastria — 1 coppia
+# ---- Sinastria (1 caso) ----
 - id: sinastria_01
 type: sinastria
 A:
@@ -69,7 +80,3 @@ B:
 name: "B"
 when: "1990-02-11T21:15:00"
 place: { lat: 41.9028, lon: 12.4964, name: "Roma" }
-
-
-# categorie intensità da produrre/aggregare (esempio)
-intensity_categories: [energy, emotions, relationships, work, luck]
