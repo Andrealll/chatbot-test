@@ -1,0 +1,30 @@
+{
+  "angles_A": {
+    "Sole": 116.0478,
+    "Luna": 261.7969,
+    "Mercurio": 123.3306,
+    "Venere": 158.2653,
+    "Marte": 285.1681,
+    "Giove": 352.7931,
+    "Saturno": 243.3567,
+    "Urano": 258.9886,
+    "Nettuno": 273.8394,
+    "Plutone": 214.5406,
+    "Nodo": 25.4872,
+    "Lilith": 95.32
+  },
+  "angles_B": {
+    "Sole": 321.9944,
+    "Luna": 156.3283,
+    "Mercurio": 298.5969,
+    "Venere": 291.0575,
+    "Marte": 278.9753,
+    "Giove": 91.1253,
+    "Saturno": 290.3206,
+    "Urano": 278.0242,
+    "Nettuno": 283.4864,
+    "Plutone": 227.7672,
+    "Nodo": 316.4917,
+    "Lilith": 234.6219
+  }
+}
