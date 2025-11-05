@@ -57,7 +57,9 @@ def save_base64_png(b64: str, png_path: Path) -> None:
 def _angles_at(when: datetime) -> Dict[str, float]:
     if calcola_pianeti_da_df is None or df_tutti is None:
         raise RuntimeError("astrobot_core.calcoli non disponibile: adatta gli import in adapters.py")
-    # Prova con la firma nuova (con 'colonne_extra'), altrimenti fallback alla firma vecchia
+
+    # Prova prima la firma "nuova" con colonne_extra,
+    # altrimenti ricadi sulla "vecchia" senza quel parametro.
     try:
         return calcola_pianeti_da_df(
             df_tutti, when.day, when.month, when.year, colonne_extra=("Nodo", "Lilith")
