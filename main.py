@@ -257,3 +257,10 @@ def tema_endpoint(
 @app.get("/", tags=["Root"])
 def root():
     return {"status": "ok", "message": "AstroBot v13 MAIN PAYWALL 🪐"}
+
+
+# in cima agli import
+from routes_oroscopo import router as oroscopo_router
+
+# dopo la creazione della app FastAPI
+app.include_router(oroscopo_router)
