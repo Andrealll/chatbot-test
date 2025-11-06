@@ -257,9 +257,6 @@ def tema_endpoint(
 # ROOT
 # =========================================================
 
-@app.get("/")
+@app.get("/", tags=["Root"])
 def root():
-    return {
-        "status": "ok",
-        "message": "Astro API up & running (Groq OFF, cookie logic ON).",
-    }
+    return {"status": "ok", "message": "AstroBot v13 MAIN PAYWALL 🪐"}
