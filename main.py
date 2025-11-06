@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import time
 import os
@@ -92,10 +92,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --------------------------- HELPER OUTPUT UNIFICATO ---------------------------
+
+def build_response(
+    scope: str,
+    tier: str = "free",
+    intensities: Optional[Dict[str, Any]] = None,
+    transits: Optional[List[Dict[str, Any]]] = None,
+    cases: Optional[Dict[str, Any]] = None,
+    graphs: Optional[Dict[str, Any]] = None,
+    text: Optional[Dict[str, Any]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Schema unificato per tutti i metodi (tema, sinastria, oroscopi, ecc.).
+    """
+    return {
+        "scope": scope,
+        "tier": tier,
+        "intensities": intensities or {},
+        "transits": transits or [],
+        "cases": cases or {},
+        "graphs": graphs or {},
+        "text": text or {},
+        "meta": meta or {},
+    }
+
 # ====================== AGGIUNTE (minime) ======================
 # Monta il router /demo solo se disponibile
 if build_demo_router is not None:
     app.include_router(build_demo_router(supabase), tags=["Demo"])
+
 
 # Inizializza Redis rate-limit se disponibile
 @app.on_event("startup")
@@ -110,21 +137,21 @@ async def _startup():
 def root():
     return {"status": "ok", "message": "AstroBot v13 online 🪐"}
 
-# --------------------------- TEMA ---------------------------
+# --------------------------- TEMA (NUOVO SCHEMA T6.2) ---------------------------
 
-@app.post("/tema", tags=["Tema"], summary="Calcola tema (pianeti + ASC) e genera immagine/interpretazione")
+@app.post("/tema", tags=["Tema"], summary="Calcola tema natale (pianeti + ASC/MC/case) con grafico polare")
 async def tema(request: Request):
     start = time.time()
     try:
         body = await request.json()
         citta = body.get("citta")
-        data = body.get("data")
-        ora_str = body.get("ora")
+        data = body.get("data")    # es. "1986-07-19" o "19/07/1986"
+        ora_str = body.get("ora")  # es. "08:50"
 
         if not all([citta, data, ora_str]):
             raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
 
-        # parsing flessibile (YYYY-MM-DD / DD/MM/YYYY) + HH:MM
+        # parsing flessibile (YYYY-MM-DD / DD/MM/YYYY / YYYY/MM/DD) + HH:MM
         dt = None
         for fmt in ("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%Y/%m/%d %H:%M"):
             try:
@@ -141,28 +168,79 @@ async def tema(request: Request):
         g, m, a = dt.day, dt.month, dt.year
         h, mi = dt.hour, dt.minute
 
-        # calcoli core
-        asc = calcola_asc_mc_case(citta, a, m, g, h, mi)
+        # ---------- CALCOLI CORE ----------
+        asc_mc_case = calcola_asc_mc_case(citta, a, m, g, h, mi)
         pianeti_raw = calcola_pianeti_da_df(df_tutti, g, m, a, h, mi)
         pianeti_decod = decodifica_segni(pianeti_raw)
         img_b64 = genera_carta_base64(a, m, g, h, mi, citta)
 
-        # interpretazione (Groq)
+        # ---------- INTERPRETAZIONE (GROQ) ----------
         interpretazione_data = interpreta_groq(
-            asc=asc,
+            asc=asc_mc_case,
             pianeti_decod=pianeti_decod,
-            meta={"citta": citta, "data": f"{a}-{m:02d}-{g:02d}", "ora": f"{h:02d}:{mi:02d}"}
+            meta={
+                "citta": citta,
+                "data": f"{a}-{m:02d}-{g:02d}",
+                "ora": f"{h:02d}:{mi:02d}",
+            },
         )
 
-        elapsed = int((time.time() - start) * 1000)
+        # ---------- SECTION: GRAPHS ----------
+        graphs = {
+            "tema_polare": {
+                "type": "polar",
+                "format": "base64_png",
+                "data": img_b64,  # base64 dell'immagine del tema
+            }
+        }
+
+        # ---------- SECTION: CASE ----------
+        cases = {
+            "ascendente": {
+                "segno": asc_mc_case.get("ASC_segno"),
+                "gradi_segno": asc_mc_case.get("ASC_gradi_segno"),
+                "gradi_eclittici": asc_mc_case.get("ASC"),
+            },
+            "mc": {
+                "segno": asc_mc_case.get("MC_segno"),
+                "gradi_segno": asc_mc_case.get("MC_gradi_segno"),
+                "gradi_eclittici": asc_mc_case.get("MC"),
+            },
+            # lista completa delle 12 case se presente nel dict
+            "case": asc_mc_case.get("case", []),
+            # opzionale: per debug/compatibilità manteniamo anche l'oggetto raw
+            "raw": asc_mc_case,
+        }
+
+        # ---------- SECTION: TESTO ----------
+        text = {
+            "detailed": interpretazione_data.get("interpretazione"),
+            "summary": interpretazione_data.get("sintesi"),
+        }
+
+        elapsed_ms = int((time.time() - start) * 1000)
+        meta = {
+            "citta": citta,
+            "data_nascita": f"{a:04d}-{m:02d}-{g:02d}",
+            "ora_nascita": f"{h:02d}:{mi:02d}",
+            "elapsed_ms": elapsed_ms,
+        }
+
+        # OUTPUT UNIFICATO T6
+        result = build_response(
+            scope="tema",
+            tier="free",          # in futuro potrai distinguere free/premium
+            intensities={},       # per il tema lasciamo vuoto
+            transits=[],          # non ci sono transiti qui
+            cases=cases,
+            graphs=graphs,
+            text=text,
+            meta=meta,
+        )
+
         return {
             "status": "ok",
-            "ascendente": asc,
-            "pianeti": pianeti_decod,
-            "interpretazione": interpretazione_data.get("interpretazione"),
-            "sintesi": interpretazione_data.get("sintesi"),
-            "image_base64": img_b64,
-            "elapsed_ms": elapsed
+            "result": result,
         }
 
     except HTTPException:
