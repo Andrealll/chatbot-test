@@ -4,7 +4,15 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import time
 import uuid
+from datetime import datetime
 
+from astrobot_core.calcoli import (
+    df_tutti,
+    calcola_asc_mc_case,
+    calcola_pianeti_da_df,
+    decodifica_segni,
+    genera_carta_base64,  # useremo questo per la carta
+)
 # =========================================================
 # MODELLI Pydantic
 # =========================================================
@@ -153,7 +161,7 @@ def tema_endpoint(
 ):
     """
     Calcola il tema natale.
-    QUI Groq è DISABILITATO. L'interpretazione resta None / messaggio di placeholder.
+    Groq è DISABILITATO: niente interpretazione, solo dati + carta.
     """
     start = time.time()
 
@@ -162,38 +170,71 @@ def tema_endpoint(
         response.set_cookie(
             key=COOKIE_TIER,
             value=payload.tier,
-            httponly=False,   # leggibile da frontend
+            httponly=False,   # leggibile dal frontend
             samesite="lax",
         )
 
-    # Qui metti le tue funzioni reali di calcolo
-    # -------------------------------------------------
-    # ESEMPIO: sostituisci con i tuoi import reali
-    # from servizi.astro import calcola_tema, genera_carta_base64
-    # tema = calcola_tema(payload.citta, payload.data, payload.ora, sistema_case="equal")
-    # carta_base64 = genera_carta_base64(dati_tema=tema)
-    # -------------------------------------------------
+    # ================== Calcolo TEMA REALE ==================
+    try:
+        # parsing data/ora
+        dt = datetime.strptime(f"{payload.data} {payload.ora}", "%Y-%m-%d %H:%M")
+        giorno = dt.day
+        mese = dt.month
+        anno = dt.year
+        ora = dt.hour
+        minuti = dt.minute
 
-    # Per adesso uso un finto tema basato sui dati che mi hai mostrato,
-    # giusto per non rompere nulla lato forma JSON:
-    tema_finto = {
-        "data": f"{payload.data} {payload.ora}",
-        "pianeti_decod": {},
-        "asc_mc_case": {
-            "citta": payload.citta,
-            "ASC_segno": "Vergine",
-            "ASC_gradi_segno": 1.0,
-            "MC_segno": "Toro",
-            "MC_gradi_segno": 25.87,
-            "sistema_case": "equal",
-        },
-    }
+        # 1) ASC, MC, CASE
+        asc_mc_case = calcola_asc_mc_case(
+            citta=payload.citta,
+            anno=anno,
+            mese=mese,
+            giorno=giorno,
+            ora=ora,
+            minuti=minuti,
+            sistema_case="equal",
+        )
 
-    # Carta: per ora None, così non esplode se non hai la funzione
-    carta_base64 = None
-    carta_error = None
+        # 2) Pianeti
+        pianeti = calcola_pianeti_da_df(
+            df_tutti,
+            giorno=giorno,
+            mese=mese,
+            anno=anno,
+            ora=ora,
+            minuti=minuti,
+        )
 
-    # Interpretazione Groq DISABILITATA VOLONTARIAMENTE
+        # 3) Decodifica (segno, gradi, casa, ecc.)
+        pianeti_decod = decodifica_segni(
+            pianeti,
+            asc_mc_case,
+        )
+
+        # 4) Tema da restituire
+        tema = {
+            "data": dt.strftime("%Y-%m-%d %H:%M"),
+            "pianeti_decod": pianeti_decod,
+            "asc_mc_case": asc_mc_case,
+        }
+
+        # 5) Carta (usa la tua implementazione attuale di genera_carta_base64)
+        #    Se hai aggiornato la funzione con il nuovo grafico, userà già quello.
+        carta_base64 = genera_carta_base64(
+            pianeti_decod=pianeti_decod,
+            asc_mc_case=asc_mc_case,
+            aspetti=None,  # per il solo tema natale possiamo lasciare None
+        )
+        carta_error = None
+
+    except Exception as e:
+        tema = None
+        pianeti_decod = {}
+        asc_mc_case = None
+        carta_base64 = None
+        carta_error = f"Errore generazione tema/carta: {e}"
+
+    # ================== Interpretazione (GROQ OFF) ==================
     interpretazione = None
     interpretazione_error = "Interpretazione disabilitata (Groq non chiamato in questa versione)."
 
@@ -203,12 +244,13 @@ def tema_endpoint(
         status="ok",
         elapsed=elapsed,
         input=payload.model_dump(),
-        tema=tema_finto,
+        tema=tema,
         interpretazione=interpretazione,
         interpretazione_error=interpretazione_error,
         carta_base64=carta_base64,
         carta_error=carta_error,
     )
+
 
 
 # =========================================================
