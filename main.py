@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Depends, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from astrobot_core.calcoli import (
     df_tutti,
@@ -14,7 +16,7 @@ from astrobot_core.calcoli import (
     genera_carta_base64,
 )
 
-# se hai già questo file, l'import resta invariato
+# Router oroscopo (già esistente)
 from routes_oroscopo import router as oroscopo_router
 
 
@@ -525,9 +527,15 @@ def sinastria_endpoint(
 
 
 # =========================================================
-# ROOT
+# ROOT → SERVE index.html
 # =========================================================
 
-@app.get("/", tags=["Root"])
+@app.get("/", response_class=HTMLResponse, tags=["Root"])
 def root():
-    return {"status": "ok", "message": "AstroBot v13 MAIN PAYWALL 🪐"}
+    """
+    Serve index.html se presente nella stessa cartella di main.py.
+    """
+    index_path = Path(__file__).parent / "index.html"
+    if not index_path.exists():
+        return "<h1>AstroBot</h1><p>index.html non trovato.</p>"
+    return index_path.read_text(encoding="utf-8")
