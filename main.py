@@ -173,7 +173,7 @@ async def tema(request: Request):
         asc_mc_case = calcola_asc_mc_case(citta, a, m, g, h, mi,sistema_case=sistema_case)
         pianeti_raw = calcola_pianeti_da_df(df_tutti, g, m, a, h, mi)
         pianeti_decod = decodifica_segni(pianeti_raw)
-        img_b64 = genera_carta_base64(a, m, g, h, mi, citta)
+        img_b64 = genera_carta_base64(a, m, g, h, mi, citta, sistema_case=sistema_case)
 
         # ---------- INTERPRETAZIONE (GROQ) ----------
         interpretazione_data = interpreta_groq(
