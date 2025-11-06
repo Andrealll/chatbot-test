@@ -448,7 +448,7 @@ def transiti_post(req: TransitiReq):
     )
 
 
-@app.get("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (GET)")]
+@app.get("/transiti", tags=["Transiti"], summary="Calcolo transiti su data fissa (GET)")
 def transiti_get(
     giorno: int,
     mese: int,
