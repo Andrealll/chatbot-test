@@ -104,12 +104,18 @@ class SinastriaRequest(BaseModel):
 # =============================================================================
 # ENDPOINT: TEMA NATALE
 # =============================================================================
-
 @app.post("/tema", tags=["Tema"], summary="Calcolo tema natale + interpretazione")
 async def tema(payload: TemaRequest):
     start = time.time()
+
+    # inizializzo campi / errori per debug
+    carta_base64 = None
+    carta_error = None
+    interpretazione = None
+    interpretazione_error = None
+
     try:
-        # parsing data/ora
+        # 1) Parsing data/ora
         try:
             dt_nascita = datetime.strptime(
                 f"{payload.data} {payload.ora}", "%Y-%m-%d %H:%M"
@@ -120,7 +126,7 @@ async def tema(payload: TemaRequest):
                 detail="Formato data/ora non valido. Usa data=YYYY-MM-DD e ora=HH:MM.",
             )
 
-        # ASC, MC e case
+        # 2) ASC, MC, Case
         asc_mc_case = calcola_asc_mc_case(
             citta=payload.citta,
             anno=dt_nascita.year,
@@ -130,7 +136,7 @@ async def tema(payload: TemaRequest):
             minuti=dt_nascita.minute,
         )
 
-        # Pianeti (con Nodo e Lilith)
+        # 3) Pianeti (con Nodo e Lilith)
         pianeti = calcola_pianeti_da_df(
             df_tutti,
             giorno=dt_nascita.day,
@@ -140,35 +146,41 @@ async def tema(payload: TemaRequest):
         )
         pianeti_decod = decodifica_segni(pianeti)
 
-        # Grafico polare in base64
-        carta_base64 = genera_carta_base64(
-            anno=dt_nascita.year,
-            mese=dt_nascita.month,
-            giorno=dt_nascita.day,
-            ora=dt_nascita.hour,
-            minuti=dt_nascita.minute,
-            lat=asc_mc_case["lat"],
-            lon=asc_mc_case["lon"],
-            fuso_orario=asc_mc_case["fuso_orario"],
-            sistema_case="placidus",
-            include_node=True,
-            include_lilith=True,
-            mostra_asc=True,
-            mostra_mc=True,
-            titolo=None,
-        )
+        # 4) Grafico polare (isolato in try/except)
+        try:
+            carta_base64 = genera_carta_base64(
+                anno=dt_nascita.year,
+                mese=dt_nascita.month,
+                giorno=dt_nascita.day,
+                ora=dt_nascita.hour,
+                minuti=dt_nascita.minute,
+                lat=asc_mc_case["lat"],
+                lon=asc_mc_case["lon"],
+                fuso_orario=asc_mc_case["fuso_orario"],
+                sistema_case="placidus",
+                include_node=True,
+                include_lilith=True,
+                mostra_asc=True,
+                mostra_mc=True,
+                titolo=None,
+            )
+        except Exception as e:
+            carta_error = f"Errore genera_carta_base64: {e}"
 
-        # Interpretazione via Groq
-        interpretazione = interpreta_groq(
-            nome=payload.nome,
-            citta=payload.citta,
-            data_nascita=payload.data,
-            ora_nascita=payload.ora,
-            pianeti=pianeti_decod,
-            asc_mc_case=asc_mc_case,
-            domanda=payload.domanda,
-            scope=payload.scope or "tema",
-        )
+        # 5) Interpretazione Groq (isolata in try/except)
+        try:
+            interpretazione = interpreta_groq(
+                nome=payload.nome,
+                citta=payload.citta,
+                data_nascita=payload.data,
+                ora_nascita=payload.ora,
+                pianeti=pianeti_decod,
+                asc_mc_case=asc_mc_case,
+                domanda=payload.domanda,
+                scope=payload.scope or "tema",
+            )
+        except Exception as e:
+            interpretazione_error = f"Errore interpreta_groq: {e}"
 
         elapsed = time.time() - start
 
@@ -183,15 +195,17 @@ async def tema(payload: TemaRequest):
                 "asc_mc_case": asc_mc_case,
             },
             "interpretazione": interpretazione,
+            "interpretazione_error": interpretazione_error,
             "carta_base64": carta_base64,
+            "carta_error": carta_error,
         }
 
     except HTTPException:
+        # errori di validazione li rilanciamo
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore interno: {e}")
-
-
+        # fallback generico
+        raise HTTPException(status_code=500, detail=f"Errore interno /tema: {e}")
 # =============================================================================
 # ENDPOINT: SINASTRIA
 # =============================================================================
