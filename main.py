@@ -275,12 +275,13 @@ async def tema(request: Request):
         # Aspetti base per grafico/tabella
         aspetti = calcola_aspetti_semplici(pianeti_raw, orb_max=6.0)
 
+
         # Pacchetto dati tema per il grafico "Venus 2.0"
+        # (gli aspetti se li calcola da solo il grafico)
         dati_tema = {
             "pianeti": pianeti_raw,
             "pianeti_decod": pianeti_decod,
             "asc_mc_case": asc_mc_case,
-            "aspetti": aspetti,
         }
 
         # Nuova funzione: un solo argomento posizionale (dati_tema)
