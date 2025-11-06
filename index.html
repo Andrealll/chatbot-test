@@ -1,31 +1,185 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="it">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Chatbot Test</title>
+    <meta charset="utf-8" />
+    <title>AstroBot – Demo /tema & /sinastria</title>
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        background-color: #f7f7f7;
-        text-align: center;
-        margin: 0;
-        padding: 0;
-      }
-      h1 {
-        background-color: #4a4aff;
-        color: white;
-        padding: 20px;
-      }
-      iframe {
-        border: none;
-        width: 100%;
-        height: 80vh;
-      }
+      body { font-family: system-ui, sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; }
+      h1, h2 { margin-bottom: 0.3rem; }
+      form { margin-bottom: 1rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+      label { display: block; margin-top: 0.5rem; }
+      input { width: 100%; padding: 0.3rem; }
+      button { margin-top: 0.8rem; padding: 0.4rem 0.8rem; cursor: pointer; }
+      .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+      .col { flex: 1 1 250px; }
+      img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 0.5rem; }
+      pre { background: #f7f7f7; padding: 0.5rem; border-radius: 6px; max-height: 300px; overflow: auto; }
     </style>
   </head>
   <body>
-    <h1>Chatbot Demo</h1>
-    <iframe src="https://typebot.io/tuo-bot-id" allow="microphone;"></iframe>
+    <h1>AstroBot – Demo</h1>
+
+    <section>
+      <h2>/tema</h2>
+      <form id="tema-form">
+        <div class="row">
+          <div class="col">
+            <label>Città</label>
+            <input name="citta" value="Napoli, IT" />
+          </div>
+          <div class="col">
+            <label>Data (YYYY-MM-DD)</label>
+            <input name="data" value="1986-07-19" />
+          </div>
+          <div class="col">
+            <label>Ora (HH:MM)</label>
+            <input name="ora" value="08:50" />
+          </div>
+          <div class="col">
+            <label>Nome</label>
+            <input name="nome" value="Junior" />
+          </div>
+        </div>
+        <button type="submit">Calcola tema</button>
+      </form>
+
+      <div class="row">
+        <div class="col">
+          <h3>PNG polare</h3>
+          <img id="tema-img" alt="Grafico tema" />
+        </div>
+        <div class="col">
+          <h3>JSON risposta</h3>
+          <pre id="tema-json"></pre>
+        </div>
+      </div>
+    </section>
+
+    <hr />
+
+    <section>
+      <h2>/sinastria</h2>
+      <form id="sinastria-form">
+        <h3>Persona A</h3>
+        <div class="row">
+          <div class="col">
+            <label>Città A</label>
+            <input name="cittaA" value="Napoli, IT" />
+          </div>
+          <div class="col">
+            <label>Data A</label>
+            <input name="dataA" value="1986-07-19" />
+          </div>
+          <div class="col">
+            <label>Ora A</label>
+            <input name="oraA" value="08:50" />
+          </div>
+          <div class="col">
+            <label>Nome A</label>
+            <input name="nomeA" value="Junior" />
+          </div>
+        </div>
+
+        <h3>Persona B</h3>
+        <div class="row">
+          <div class="col">
+            <label>Città B</label>
+            <input name="cittaB" value="Milano, IT" />
+          </div>
+          <div class="col">
+            <label>Data B</label>
+            <input name="dataB" value="1990-01-01" />
+          </div>
+          <div class="col">
+            <label>Ora B</label>
+            <input name="oraB" value="12:00" />
+          </div>
+          <div class="col">
+            <label>Nome B</label>
+            <input name="nomeB" value="Partner" />
+          </div>
+        </div>
+
+        <button type="submit">Calcola sinastria</button>
+      </form>
+
+      <div class="row">
+        <div class="col">
+          <h3>PNG polare</h3>
+          <img id="sinastria-img" alt="Grafico sinastria" />
+        </div>
+        <div class="col">
+          <h3>JSON risposta</h3>
+          <pre id="sinastria-json"></pre>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      async function callApi(url, body) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || res.statusText);
+        }
+        return res.json();
+      }
+
+      document.getElementById("tema-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const body = {
+          citta: form.citta.value,
+          data: form.data.value,
+          ora: form.ora.value,
+          nome: form.nome.value || null,
+          scope: "tema",
+          tier: "free",
+        };
+        try {
+          const json = await callApi("/tema/", body);
+          document.getElementById("tema-json").textContent = JSON.stringify(json, null, 2);
+          if (json.png_base64) {
+            document.getElementById("tema-img").src = json.png_base64;
+          }
+        } catch (err) {
+          document.getElementById("tema-json").textContent = err.message;
+        }
+      });
+
+      document.getElementById("sinastria-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const body = {
+          A: {
+            citta: form.cittaA.value,
+            data: form.dataA.value,
+            ora: form.oraA.value,
+            nome: form.nomeA.value || null,
+          },
+          B: {
+            citta: form.cittaB.value,
+            data: form.dataB.value,
+            ora: form.oraB.value,
+            nome: form.nomeB.value || null,
+          },
+          scope: "sinastria",
+          tier: "free",
+        };
+        try {
+          const json = await callApi("/sinastria/", body);
+          document.getElementById("sinastria-json").textContent = JSON.stringify(json, null, 2);
+          if (json.png_base64) {
+            document.getElementById("sinastria-img").src = json.png_base64;
+          }
+        } catch (err) {
+          document.getElementById("sinastria-json").textContent = err.message;
+        }
+      });
+    </script>
   </body>
 </html>
