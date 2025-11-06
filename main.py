@@ -205,14 +205,7 @@ def tema_endpoint(
             minuti=minuti,
         )
 
-# 3) Decodifica (segno, gradi, casa, ecc.)
-# Alcune versioni di decodifica_segni accettano solo 1 posizionale,
-# altre vogliono asc_mc_case come keyword-only.
-try:
-    pianeti_decod = decodifica_segni(pianeti, asc_mc_case=asc_mc_case)
-except TypeError:
-    # fallback se la funzione accetta solo 1 argomento
-    pianeti_decod = decodifica_segni(pianeti)
+        pianeti_decod = decodifica_segni(pianeti)
 
 
         # 4) Tema da restituire
