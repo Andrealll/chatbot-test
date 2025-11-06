@@ -147,6 +147,7 @@ async def tema(request: Request):
         citta = body.get("citta")
         data = body.get("data")    # es. "1986-07-19" o "19/07/1986"
         ora_str = body.get("ora")  # es. "08:50"
+        sistema_case = body.get("sistema_case", "equal")
 
         if not all([citta, data, ora_str]):
             raise HTTPException(status_code=422, detail="Parametri 'citta', 'data' e 'ora' obbligatori.")
@@ -169,7 +170,7 @@ async def tema(request: Request):
         h, mi = dt.hour, dt.minute
 
         # ---------- CALCOLI CORE ----------
-        asc_mc_case = calcola_asc_mc_case(citta, a, m, g, h, mi)
+        asc_mc_case = calcola_asc_mc_case(citta, a, m, g, h, mi,sistema_case=sistema_case)
         pianeti_raw = calcola_pianeti_da_df(df_tutti, g, m, a, h, mi)
         pianeti_decod = decodifica_segni(pianeti_raw)
         img_b64 = genera_carta_base64(a, m, g, h, mi, citta)
