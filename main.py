@@ -136,14 +136,25 @@ async def tema(payload: TemaRequest):
             minuti=dt_nascita.minute,
         )
 
-        # 3) Pianeti (con Nodo e Lilith)
-        pianeti = calcola_pianeti_da_df(
-            df_tutti,
-            giorno=dt_nascita.day,
-            mese=dt_nascita.month,
-            anno=dt_nascita.year,
-            colonne_extra=("Nodo", "Lilith"),
-        )
+        # 3) Pianeti (con fallback se la funzione non supporta colonne_extra)
+        try:
+            # versione “nuova” (se disponibile)
+            pianeti = calcola_pianeti_da_df(
+                df_tutti,
+                giorno=dt_nascita.day,
+                mese=dt_nascita.month,
+                anno=dt_nascita.year,
+                colonne_extra=("Nodo", "Lilith"),
+            )
+        except TypeError:
+            # versione “vecchia” senza colonne_extra
+            pianeti = calcola_pianeti_da_df(
+                df_tutti,
+                giorno=dt_nascita.day,
+                mese=dt_nascita.month,
+                anno=dt_nascita.year,
+            )
+
         pianeti_decod = decodifica_segni(pianeti)
 
         # 4) Grafico polare (isolato in try/except)
@@ -206,6 +217,7 @@ async def tema(payload: TemaRequest):
     except Exception as e:
         # fallback generico
         raise HTTPException(status_code=500, detail=f"Errore interno /tema: {e}")
+
 # =============================================================================
 # ENDPOINT: SINASTRIA
 # =============================================================================
