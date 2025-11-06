@@ -5,6 +5,33 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import time
 import os
+import uuid
+
+# ================== GESTIONE SESSIONI FREE ==================
+# Dizionario in memoria: session_id -> numero di chiamate free
+SESSIONS_FREE: Dict[str, int] = {}
+
+# Quante richieste gratuite permettiamo prima del paywall soft
+FREE_CALLS_THRESHOLD = 3
+
+
+def aggiorna_sessione_free(session_id: Optional[str]):
+    """
+    Gestisce il session_id e il numero di chiamate free.
+    Ritorna: (session_id, n_calls_free, paywall_attivo)
+    """
+    # Se il client non manda un session_id, ne generiamo uno noi
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    # Leggiamo il contatore corrente (default 0) e lo incrementiamo
+    n_calls = SESSIONS_FREE.get(session_id, 0) + 1
+    SESSIONS_FREE[session_id] = n_calls
+
+    # Paywall attivo se superiamo la soglia
+    paywall_attivo = n_calls > FREE_CALLS_THRESHOLD
+
+    return session_id, n_calls, paywall_attivo
 
 # ---- CORE: calcoli & metodi ----
 from astrobot_core.calcoli import (
@@ -144,6 +171,27 @@ async def tema(request: Request):
     start = time.time()
     try:
         body = await request.json()
+
+        # --- GESTIONE SESSIONE FREE / PAYWALL ---
+        session_id = body.get("session_id")  # può essere None la prima volta
+        session_id, n_calls_free, paywall_attivo = aggiorna_sessione_free(session_id)
+
+        # Per ora nessuno è premium: JWT lo aggiungiamo dopo
+        is_premium = False
+
+        # Se supero la soglia e NON sono premium -> paywall soft
+        if paywall_attivo and not is_premium:
+            return {
+                "status": "paywall",
+                "session_id": session_id,
+                "n_calls_free": n_calls_free,
+                "message": "Hai già scoperto molto di te 🌟 Vuoi sbloccare transiti, sinastria e contenuti premium?",
+                "cta": {
+                    "premium": "Attiva versione Premium",
+                    "free": "Continua in versione Free (limitata)"
+                }
+            }
+       
         citta = body.get("citta")
         data = body.get("data")    # es. "1986-07-19" o "19/07/1986"
         ora_str = body.get("ora")  # es. "08:50"
@@ -239,10 +287,14 @@ async def tema(request: Request):
             meta=meta,
         )
 
-        return {
+                return {
             "status": "ok",
             "result": result,
+            "session_id": session_id,
+            "n_calls_free": n_calls_free,
+            "is_premium": is_premium,
         }
+
 
     except HTTPException:
         raise
