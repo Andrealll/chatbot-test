@@ -80,8 +80,10 @@ class Aspetto(BaseModel):
 
 class OroscopoRequest(BaseModel):
     scope: str  # "giornaliero" | "settimanale" | "mensile" | "annuale"
-    tema: Dict[str, Any]  # output del /tema (almeno pianeti_decod, pianeti_nelle_case opzionale)
-    aspetti: Optional[List[Aspetto]] = None  # opzionale: lista aspetti già calcolata dal core
+    # output del /tema (almeno: pianeti_decod, asc_mc_case)
+    tema: Dict[str, Any]
+    # opzionale: lista aspetti già calcolata dal core (pianetaA/B, tipo, orb, peso)
+    aspetti: Optional[List[Aspetto]] = None
 
 
 # =========================================================
@@ -115,15 +117,39 @@ def pianeti_rilevanti(scope: str) -> List[str]:
     return [p for p, w in pesi_scope.items() if w >= SOGLIA_PESO]
 
 
+def calcola_casa_equal(gradi_eclittici: float, asc_mc_case: Dict[str, Any]) -> Optional[int]:
+    """
+    Calcola la casa natale in sistema equal, usando ASC e la longitudine eclittica del pianeta.
+    Ritorna un intero 1..12 oppure None se manca qualcosa.
+    """
+    if not asc_mc_case:
+        return None
+
+    asc = asc_mc_case.get("ASC")
+    sistema = asc_mc_case.get("sistema_case", "").lower()
+
+    if asc is None or sistema != "equal":
+        return None
+
+    # distanza dal grado dell'ASC lungo lo zodiaco
+    delta = (gradi_eclittici - asc) % 360.0
+    casa = int(delta // 30.0) + 1  # 0–29 → 1, 30–59 → 2, ecc.
+
+    if casa < 1 or casa > 12:
+        casa = ((casa - 1) % 12) + 1
+
+    return casa
+
+
 def estrai_pianeti_periodo(
     pianeti_decod: Dict[str, Dict[str, Any]],
-    case_natali: Dict[str, Any],
+    asc_mc_case: Dict[str, Any],
     scope: str,
 ) -> List[Dict[str, Any]]:
     """
     Estrae per lo scope:
       - solo pianeti con peso >= SOGLIA_PESO
-      - segno, gradi nel segno, casa natale
+      - segno, gradi nel segno, casa natale (calcolata da ASC equal houses)
     """
     scope = normalizza_scope(scope)
     pianeti_sel = pianeti_rilevanti(scope)
@@ -136,13 +162,19 @@ def estrai_pianeti_periodo(
             continue
 
         dati = pianeti_decod[nome]
+        gradi_segno = dati.get("gradi_segno")
+        gradi_eclittici = dati.get("gradi_eclittici")
+
+        casa = None
+        if gradi_eclittici is not None:
+            casa = calcola_casa_equal(gradi_eclittici, asc_mc_case)
+
         risultati.append({
             "nome": nome,
             "peso_periodo": pesi_scope.get(nome),
             "segno": dati.get("segno"),
-            "gradi": dati.get("gradi_segno"),
-            # case_natali si assume: { "Sole": 11, "Luna": 7, ... }
-            "casa": case_natali.get(nome),
+            "gradi": gradi_segno,
+            "casa": casa,
         })
 
     return risultati
@@ -225,8 +257,15 @@ def oroscopo(req: OroscopoRequest):
     Input atteso:
       - scope: "giornaliero" | "settimanale" | "mensile" | "annuale"
       - tema: output del /tema, deve contenere almeno:
-          tema["pianeti_decod"] = { "Sole": {"segno": ..., "gradi_segno": ...}, ... }
-          tema["pianeti_nelle_case"] (opzionale) = { "Sole": 11, "Luna": 7, ... }
+          tema["pianeti_decod"] = {
+              "Sole": {"segno": ..., "gradi_segno": ..., "gradi_eclittici": ...},
+              ...
+          }
+          tema["asc_mc_case"] = {
+              "ASC": ...,
+              "sistema_case": "equal",
+              ...
+          }
       - aspetti: opzionale, lista di Aspetto:
           {
             "pianetaA": "Luna",
@@ -252,13 +291,12 @@ def oroscopo(req: OroscopoRequest):
 
     tema = req.tema or {}
     pianeti_decod = tema.get("pianeti_decod", {})
-    # opzionale: se non c'è, le case verranno None
-    case_natali = tema.get("pianeti_nelle_case", {})
+    asc_mc_case = tema.get("asc_mc_case", {})
 
     # 1) pianeti del periodo (peso >= 0.7) con segno, gradi, casa
     pianeti_periodo = estrai_pianeti_periodo(
         pianeti_decod=pianeti_decod,
-        case_natali=case_natali,
+        asc_mc_case=asc_mc_case,
         scope=scope,
     )
 
