@@ -7,8 +7,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from routes_oroscopo import router as oroscopo_router
-app.include_router(oroscopo_router)
+
 from astrobot_core.calcoli import (
     df_tutti,
     calcola_asc_mc_case,
@@ -25,9 +24,27 @@ from astrobot_core.grafici import (
     grafico_linee_premium,
 )
 
-# Router oroscopo (già esistente)
+# Router oroscopo
 from routes_oroscopo import router as oroscopo_router
 
+# =========================================================
+# CREAZIONE APP FASTAPI
+# =========================================================
+
+app = FastAPI()
+
+# (se hai già una configurazione CORS più giù, usa quella;
+#  altrimenti puoi lasciare questo blocco base)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include il router dell'oroscopo DOPO aver creato app
+app.include_router(oroscopo_router)
 
 # =========================================================
 # MODELLI Pydantic
@@ -42,6 +59,12 @@ class TemaRequest(BaseModel):
     domanda: Optional[str] = None
     scope: Optional[str] = "tema"
     tier: Optional[str] = "free"
+
+
+class TemaResponse(BaseModel):
+    status: str
+    elapsed: float
+    input: Dict[str, Any]
 
 
 class TemaResponse(BaseModel):
