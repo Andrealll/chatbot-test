@@ -80,8 +80,11 @@ class Aspetto(BaseModel):
 
 class OroscopoRequest(BaseModel):
     scope: str  # "giornaliero" | "settimanale" | "mensile" | "annuale"
-    # output del /tema (almeno: pianeti_decod, asc_mc_case)
+    # tema natale (almeno: pianeti_decod, asc_mc_case)
     tema: Dict[str, Any]
+    # posizioni attuali dei pianeti (transiti) per l'oroscopo:
+    # stessi campi di pianeti_decod (segno, gradi_segno, gradi_eclittici, retrogrado, ...)
+    pianeti_transito: Optional[Dict[str, Dict[str, Any]]] = None
     # opzionale: lista aspetti già calcolata dal core (pianetaA/B, tipo, orb, peso)
     aspetti: Optional[List[Aspetto]] = None
 
@@ -142,14 +145,15 @@ def calcola_casa_equal(gradi_eclittici: float, asc_mc_case: Dict[str, Any]) -> O
 
 
 def estrai_pianeti_periodo(
-    pianeti_decod: Dict[str, Dict[str, Any]],
+    pianeti_transito: Dict[str, Dict[str, Any]],
     asc_mc_case: Dict[str, Any],
     scope: str,
 ) -> List[Dict[str, Any]]:
     """
     Estrae per lo scope:
       - solo pianeti con peso >= SOGLIA_PESO
-      - segno, gradi nel segno, casa natale (calcolata da ASC equal houses)
+      - segno, gradi nel segno (DI TRANSITO)
+      - casa natale (calcolata da ASC equal houses del tema natale)
     """
     scope = normalizza_scope(scope)
     pianeti_sel = pianeti_rilevanti(scope)
@@ -158,10 +162,10 @@ def estrai_pianeti_periodo(
     risultati: List[Dict[str, Any]] = []
 
     for nome in pianeti_sel:
-        if nome not in pianeti_decod:
+        if nome not in pianeti_transito:
             continue
 
-        dati = pianeti_decod[nome]
+        dati = pianeti_transito[nome]
         gradi_segno = dati.get("gradi_segno")
         gradi_eclittici = dati.get("gradi_eclittici")
 
@@ -266,6 +270,9 @@ def oroscopo(req: OroscopoRequest):
               "sistema_case": "equal",
               ...
           }
+      - pianeti_transito (opzionale):
+          posizioni attuali dei pianeti, con stessa struttura di pianeti_decod
+          (se assente, si usano i pianeti del tema natale come fallback)
       - aspetti: opzionale, lista di Aspetto:
           {
             "pianetaA": "Luna",
@@ -290,12 +297,15 @@ def oroscopo(req: OroscopoRequest):
     scope = normalizza_scope(req.scope)
 
     tema = req.tema or {}
-    pianeti_decod = tema.get("pianeti_decod", {})
+    pianeti_natal = tema.get("pianeti_decod", {})
     asc_mc_case = tema.get("asc_mc_case", {})
 
-    # 1) pianeti del periodo (peso >= 0.7) con segno, gradi, casa
+    # Se non vengono passati esplicitamente, usiamo come fallback i pianeti natali
+    pianeti_transito = req.pianeti_transito or pianeti_natal
+
+    # 1) pianeti del periodo (peso >= 0.7) con segno/gradi DI TRANSITO e casa natale
     pianeti_periodo = estrai_pianeti_periodo(
-        pianeti_decod=pianeti_decod,
+        pianeti_transito=pianeti_transito,
         asc_mc_case=asc_mc_case,
         scope=scope,
     )
