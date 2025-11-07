@@ -7,7 +7,8 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-
+from routes_oroscopo import router as oroscopo_router
+app.include_router(oroscopo_router)
 from astrobot_core.calcoli import (
     df_tutti,
     calcola_asc_mc_case,
