@@ -13,7 +13,11 @@ from astrobot_core.calcoli import (
     calcola_asc_mc_case,
     calcola_pianeti_da_df,
     decodifica_segni,
-    genera_carta_base64,
+)
+
+from astrobot_core.grafici import (
+    grafico_tema_natal,
+    grafico_sinastria,
 )
 
 # Router oroscopo (già esistente)
@@ -44,8 +48,9 @@ class TemaResponse(BaseModel):
     interpretazione_error: Optional[str] = None
     carta_base64: Optional[str] = None
     carta_error: Optional[str] = None
-    # T8: aggiunte
+    # JSON “astratto” del grafico, se serve al frontend
     grafico_polare: Optional[Dict[str, Any]] = None
+    # alias pronto per <img src="...">
     png_base64: Optional[str] = None
 
 
@@ -74,13 +79,13 @@ class SinastriaResponse(BaseModel):
 
 
 # =========================================================
-# HELPER GRAFICI (JSON)
+# HELPER GRAFICI (JSON, non PNG)
 # =========================================================
 
 def build_grafico_tema_json(tema: Dict[str, Any]) -> Dict[str, Any]:
     """
     Costruisce il JSON per il grafico polare a partire dal dict `tema`
-    (pianeti_decod, asc_mc_case, case).
+    (pianeti_decod, asc_mc_case, case). Non genera immagini.
     """
     pianeti_decod = tema.get("pianeti_decod", {}) or {}
     asc_mc_case = tema.get("asc_mc_case", {}) or {}
@@ -93,7 +98,6 @@ def build_grafico_tema_json(tema: Dict[str, Any]) -> Dict[str, Any]:
             "gradi_segno": info.get("gradi_segno"),
             "gradi_eclittici": info.get("gradi_eclittici"),
             "retrogrado": info.get("retrogrado", False),
-            # per il grafico polare
             "theta": info.get("gradi_eclittici"),
             "r": 1.0,
         })
@@ -286,7 +290,7 @@ def cookie_set_tier(
 
 
 # =========================================================
-# ENDPOINT /tema (SENZA GROQ, CON GRAFICO POLARE)
+# ENDPOINT /tema (usa grafico_tema_natal da grafici.py)
 # =========================================================
 
 @app.post("/tema", response_model=TemaResponse)
@@ -297,7 +301,10 @@ def tema_endpoint(
 ):
     """
     Calcola il tema natale.
-    Groq è DISABILITATO: niente interpretazione, solo dati + carta + JSON grafico.
+    In questa versione:
+    - usa solo il core numerico (calcoli.py)
+    - genera la carta PNG base64 con grafico_tema_natal (grafici.py)
+    - NON chiama Groq per l'interpretazione (placeholder).
     """
     start = time.time()
 
@@ -344,7 +351,6 @@ def tema_endpoint(
             ora=ora,
             minuti=minuti,
         )
-
         pianeti_decod = decodifica_segni(pianeti)
 
         # 3) Tema da restituire
@@ -354,14 +360,14 @@ def tema_endpoint(
             "asc_mc_case": asc_mc_case,
         }
 
-        # 4) Carta (grafico polare PNG base64)
-        carta_base64 = genera_carta_base64(
+        # 4) Carta (grafico polare PNG base64, senza prefisso)
+        carta_base64 = grafico_tema_natal(
             pianeti_decod=pianeti_decod,
             asc_mc_case=asc_mc_case,
-            aspetti=None,  # per il solo tema natale possiamo lasciare None
+            aspetti=None,  # quando avrai gli aspetti numerici li passi qui
         )
 
-        # 5) JSON per grafico polare
+        # 5) JSON per grafico polare (se serve al frontend)
         grafico_polare = build_grafico_tema_json(tema)
 
     except Exception as e:
@@ -376,7 +382,7 @@ def tema_endpoint(
 
     elapsed = time.time() - start
 
-    # png_base64: alias con prefisso sicuro
+    # png_base64: alias con prefisso pronto per <img src="...">
     png_base64 = carta_base64
     if png_base64 and not png_base64.startswith("data:image/png;base64,"):
         png_base64 = "data:image/png;base64," + png_base64
@@ -396,7 +402,7 @@ def tema_endpoint(
 
 
 # =========================================================
-# ENDPOINT /sinastria (DUE TEMI + GRAFICO POLARE)
+# ENDPOINT /sinastria (usa grafico_sinastria da grafici.py)
 # =========================================================
 
 @app.post("/sinastria", response_model=SinastriaResponse)
@@ -409,8 +415,8 @@ def sinastria_endpoint(
     Calcola una sinastria di base:
     - Tema A
     - Tema B
-    - placeholder 'aspetti' (da riempire quando usi il core dedicato)
-    - PNG base64 (per ora il grafico del tema A)
+    - (aspetti AB da aggiungere quando colleghi il core sinastria)
+    - PNG base64 della carta di sinastria
     - JSON grafico polare con due serie (A e B)
     """
     start = time.time()
@@ -478,26 +484,33 @@ def sinastria_endpoint(
         )
         pianeti_decod_b = decodifica_segni(pianeti_b)
 
-        # Sinastria di base (senza aspetti per ora)
+        # TODO: quando colleghi il core sinastria, calcola qui aspetti_AB
+        aspetti_AB = None
+
+        # Sinastria “numerica”
         sinastria_data = {
             "A": {
                 "data": dt_a.strftime("%Y-%m-%d %H:%M"),
                 "pianeti_decod": pianeti_decod_a,
                 "asc_mc_case": asc_mc_case_a,
+                "nome": payload.A.nome or "A",
             },
             "B": {
                 "data": dt_b.strftime("%Y-%m-%d %H:%M"),
                 "pianeti_decod": pianeti_decod_b,
                 "asc_mc_case": asc_mc_case_b,
+                "nome": payload.B.nome or "B",
             },
-            "aspetti": None,  # TODO: integrare quando userai la funzione sinastria del core
+            "aspetti": aspetti_AB,
         }
 
-        # PNG base64: per ora riuso la carta del tema A
-        carta_base64 = genera_carta_base64(
-            pianeti_decod=pianeti_decod_a,
-            asc_mc_case=asc_mc_case_a,
-            aspetti=None,
+        # PNG base64 della carta di sinastria (grafici.py)
+        carta_base64 = grafico_sinastria(
+            pianeti_A_decod=pianeti_decod_a,
+            pianeti_B_decod=pianeti_decod_b,
+            aspetti_AB=aspetti_AB,
+            nome_A=payload.A.nome or "A",
+            nome_B=payload.B.nome or "B",
         )
 
         # JSON grafico polare sinastria
