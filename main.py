@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import time
 import uuid
 from datetime import datetime
@@ -18,6 +18,7 @@ from astrobot_core.calcoli import (
 from astrobot_core.grafici import (
     grafico_tema_natal,
     grafico_sinastria,
+    grafico_linee_premium,
 )
 
 # Router oroscopo (già esistente)
@@ -48,9 +49,7 @@ class TemaResponse(BaseModel):
     interpretazione_error: Optional[str] = None
     carta_base64: Optional[str] = None
     carta_error: Optional[str] = None
-    # JSON “astratto” del grafico, se serve al frontend
     grafico_polare: Optional[Dict[str, Any]] = None
-    # alias pronto per <img src="...">
     png_base64: Optional[str] = None
 
 
@@ -78,15 +77,32 @@ class SinastriaResponse(BaseModel):
     carta_error: Optional[str] = None
 
 
+class TransitiPremiumRequest(BaseModel):
+    """
+    Endpoint “render-only”: il core (LLM) ti genera già
+    le intensità [0–1] per i 5 domini, tu le passi qui
+    e ottieni il grafico PNG base64.
+    """
+    date_strings: List[str]              # ["2025-11-01", ...]
+    intensities: Dict[str, List[float]]  # chiavi attese: energy, emotions, relationships, work, luck
+    scope: str = "settimanale"          # "giornaliero" | "settimanale" | "mensile" | "annuale"
+    lang: str = "it"                    # "it" | "en" | "es"
+    tier: Optional[str] = "free"
+
+
+class TransitiPremiumResponse(BaseModel):
+    status: str
+    elapsed: float
+    input: Dict[str, Any]
+    png_base64: Optional[str] = None
+    carta_error: Optional[str] = None
+
+
 # =========================================================
 # HELPER GRAFICI (JSON, non PNG)
 # =========================================================
 
 def build_grafico_tema_json(tema: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Costruisce il JSON per il grafico polare a partire dal dict `tema`
-    (pianeti_decod, asc_mc_case, case). Non genera immagini.
-    """
     pianeti_decod = tema.get("pianeti_decod", {}) or {}
     asc_mc_case = tema.get("asc_mc_case", {}) or {}
 
@@ -129,10 +145,6 @@ def build_grafico_tema_json(tema: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_grafico_sinastria_json(sinastria: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    JSON per grafico polare di sinastria: due serie (A e B),
-    ciascuna con la propria lista di pianeti.
-    """
     serie = []
 
     tema_A = sinastria.get("A", {}) or {}
@@ -160,7 +172,7 @@ def build_grafico_sinastria_json(sinastria: Dict[str, Any]) -> Dict[str, Any]:
             "gradi_eclittici": info.get("gradi_eclittici"),
             "retrogrado": info.get("retrogrado", False),
             "theta": info.get("gradi_eclittici"),
-            "r": 0.8,  # r diverso per distinguerli graficamente
+            "r": 0.8,
         })
     serie.append({"serie": "B", "pianeti": pianeti_B})
 
@@ -174,7 +186,7 @@ def build_grafico_sinastria_json(sinastria: Dict[str, Any]) -> Dict[str, Any]:
 # APP & CORS
 # =========================================================
 
-app = FastAPI(title="Astro API", version="0.1.0")
+app = FastAPI(title="Astro API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -189,7 +201,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Router oroscopo (già esistente)
 app.include_router(oroscopo_router)
 
 
@@ -208,12 +219,6 @@ def get_or_set_cookies(
     astro_session_count: Optional[str] = Cookie(default=None, alias=COOKIE_SESSION_COUNT),
     astro_tier: Optional[str] = Cookie(default=None, alias=COOKIE_TIER),
 ) -> Dict[str, Any]:
-    """
-    - Se non c'è user_id → lo crea (UUID) e setta il cookie
-    - Incrementa il contatore di sessione
-    - Ritorna il contesto cookie per gli endpoint
-    """
-    # user_id
     new_user_id = astro_user_id
     if not new_user_id:
         new_user_id = str(uuid.uuid4())
@@ -224,7 +229,6 @@ def get_or_set_cookies(
             samesite="lax",
         )
 
-    # session_count
     try:
         count = int(astro_session_count) if astro_session_count is not None else 0
     except ValueError:
@@ -237,7 +241,6 @@ def get_or_set_cookies(
         samesite="lax",
     )
 
-    # tier lo gestiamo negli endpoint (se body.tier diverso, lo aggiorniamo lì)
     return {
         "user_id": new_user_id,
         "session_count": count,
@@ -254,12 +257,6 @@ def cookie_test(
     response: Response,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
-    """
-    Endpoint per vedere cosa succede con i cookie:
-    - crea user_id se manca
-    - incrementa session_count
-    - NON tocca il tier
-    """
     return {
         "status": "ok",
         "cookie_context": cookie_ctx,
@@ -272,13 +269,10 @@ def cookie_set_tier(
     tier: str,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
-    """
-    Semplice endpoint per impostare il tier nel cookie (es. 'free', 'pro', ecc.)
-    """
     response.set_cookie(
         key=COOKIE_TIER,
         value=tier,
-        httponly=False,   # se vuoi leggerlo da JS puoi lasciarlo False
+        httponly=False,   # leggibile da JS
         samesite="lax",
     )
 
@@ -290,7 +284,7 @@ def cookie_set_tier(
 
 
 # =========================================================
-# ENDPOINT /tema (usa grafico_tema_natal da grafici.py)
+# ENDPOINT /tema
 # =========================================================
 
 @app.post("/tema", response_model=TemaResponse)
@@ -299,21 +293,13 @@ def tema_endpoint(
     response: Response,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
-    """
-    Calcola il tema natale.
-    In questa versione:
-    - usa solo il core numerico (calcoli.py)
-    - genera la carta PNG base64 con grafico_tema_natal (grafici.py)
-    - NON chiama Groq per l'interpretazione (placeholder).
-    """
     start = time.time()
 
-    # Aggiorna cookie tier se nel body arriva qualcosa
     if payload.tier:
         response.set_cookie(
             key=COOKIE_TIER,
             value=payload.tier,
-            httponly=False,   # leggibile dal frontend
+            httponly=False,
             samesite="lax",
         )
 
@@ -323,7 +309,6 @@ def tema_endpoint(
     grafico_polare = None
 
     try:
-        # parsing data/ora
         dt = datetime.strptime(f"{payload.data} {payload.ora}", "%Y-%m-%d %H:%M")
         giorno = dt.day
         mese = dt.month
@@ -331,7 +316,6 @@ def tema_endpoint(
         ora = dt.hour
         minuti = dt.minute
 
-        # 1) ASC, MC, CASE
         asc_mc_case = calcola_asc_mc_case(
             citta=payload.citta,
             anno=anno,
@@ -342,7 +326,6 @@ def tema_endpoint(
             sistema_case="equal",
         )
 
-        # 2) Pianeti
         pianeti = calcola_pianeti_da_df(
             df_tutti,
             giorno=giorno,
@@ -353,21 +336,18 @@ def tema_endpoint(
         )
         pianeti_decod = decodifica_segni(pianeti)
 
-        # 3) Tema da restituire
         tema = {
             "data": dt.strftime("%Y-%m-%d %H:%M"),
             "pianeti_decod": pianeti_decod,
             "asc_mc_case": asc_mc_case,
         }
 
-        # 4) Carta (grafico polare PNG base64, senza prefisso)
         carta_base64 = grafico_tema_natal(
             pianeti_decod=pianeti_decod,
             asc_mc_case=asc_mc_case,
-            aspetti=None,  # quando avrai gli aspetti numerici li passi qui
+            aspetti=None,  # quando colleghi il core aspetti, lo passi qui
         )
 
-        # 5) JSON per grafico polare (se serve al frontend)
         grafico_polare = build_grafico_tema_json(tema)
 
     except Exception as e:
@@ -376,13 +356,11 @@ def tema_endpoint(
         grafico_polare = None
         carta_error = f"Errore generazione tema/carta: {e}"
 
-    # Interpretazione disattivata in questa versione
     interpretazione = None
     interpretazione_error = "Interpretazione disabilitata (Groq non chiamato in questa versione)."
 
     elapsed = time.time() - start
 
-    # png_base64: alias con prefisso pronto per <img src="...">
     png_base64 = carta_base64
     if png_base64 and not png_base64.startswith("data:image/png;base64,"):
         png_base64 = "data:image/png;base64," + png_base64
@@ -402,7 +380,7 @@ def tema_endpoint(
 
 
 # =========================================================
-# ENDPOINT /sinastria (usa grafico_sinastria da grafici.py)
+# ENDPOINT /sinastria
 # =========================================================
 
 @app.post("/sinastria", response_model=SinastriaResponse)
@@ -411,17 +389,8 @@ def sinastria_endpoint(
     response: Response,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
-    """
-    Calcola una sinastria di base:
-    - Tema A
-    - Tema B
-    - (aspetti AB da aggiungere quando colleghi il core sinastria)
-    - PNG base64 della carta di sinastria
-    - JSON grafico polare con due serie (A e B)
-    """
     start = time.time()
 
-    # Aggiorna cookie tier se nel body arriva qualcosa
     if payload.tier:
         response.set_cookie(
             key=COOKIE_TIER,
@@ -487,7 +456,6 @@ def sinastria_endpoint(
         # TODO: quando colleghi il core sinastria, calcola qui aspetti_AB
         aspetti_AB = None
 
-        # Sinastria “numerica”
         sinastria_data = {
             "A": {
                 "data": dt_a.strftime("%Y-%m-%d %H:%M"),
@@ -504,7 +472,6 @@ def sinastria_endpoint(
             "aspetti": aspetti_AB,
         }
 
-        # PNG base64 della carta di sinastria (grafici.py)
         carta_base64 = grafico_sinastria(
             pianeti_A_decod=pianeti_decod_a,
             pianeti_B_decod=pianeti_decod_b,
@@ -513,7 +480,6 @@ def sinastria_endpoint(
             nome_B=payload.B.nome or "B",
         )
 
-        # JSON grafico polare sinastria
         grafico_polare = build_grafico_sinastria_json(sinastria_data)
 
     except Exception as e:
@@ -540,14 +506,111 @@ def sinastria_endpoint(
 
 
 # =========================================================
+# ENDPOINT /transiti/premium (line chart 5 dimensioni)
+# =========================================================
+
+def _label_map_for_lang(lang: str) -> Dict[str, str]:
+    lang = (lang or "it").lower()
+    if lang.startswith("en"):
+        return {
+            "energy": "Energy",
+            "emotions": "Emotions",
+            "relationships": "Relationships",
+            "work": "Work",
+            "luck": "Luck",
+        }
+    if lang.startswith("es"):
+        return {
+            "energy": "Energía",
+            "emotions": "Emociones",
+            "relationships": "Relaciones",
+            "work": "Trabajo",
+            "luck": "Suerte",
+        }
+    # default IT
+    return {
+        "energy": "Energia",
+        "emotions": "Emozioni",
+        "relationships": "Relazioni",
+        "work": "Lavoro",
+        "luck": "Fortuna",
+    }
+
+
+@app.post("/transiti/premium", response_model=TransitiPremiumResponse)
+def transiti_premium_endpoint(
+    payload: TransitiPremiumRequest,
+    response: Response,
+    cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
+):
+    """
+    Endpoint per rendere il grafico a linee premium (5 dimensioni)
+    a partire da:
+    - date_strings: lista di date "YYYY-MM-DD"
+    - intensities: dict {energy, emotions, relationships, work, luck} -> liste [0..1]
+
+    Non calcola i transiti: prende le intensità dal core (LLM/backend)
+    e le trasforma in un PNG base64 per il frontend.
+    """
+    start = time.time()
+
+    if payload.tier:
+        response.set_cookie(
+            key=COOKIE_TIER,
+            value=payload.tier,
+            httponly=False,
+            samesite="lax",
+        )
+
+    carta_error = None
+    png_base64 = None
+
+    try:
+        # Validazione base lunghezze
+        n = len(payload.date_strings)
+        if n == 0:
+            raise ValueError("date_strings vuoto.")
+
+        for key, serie in payload.intensities.items():
+            if len(serie) != n:
+                raise ValueError(
+                    f"Lunghezza serie '{key}' ({len(serie)}) diversa da date_strings ({n})."
+                )
+
+        label_map = _label_map_for_lang(payload.lang)
+
+        img_b64 = grafico_linee_premium(
+            date_strings=payload.date_strings,
+            intensities_series=payload.intensities,
+            scope=payload.scope,
+            label_map=label_map,
+        )
+
+        png_base64 = img_b64
+        if not png_base64.startswith("data:image/png;base64,"):
+            png_base64 = "data:image/png;base64," + png_base64
+
+    except Exception as e:
+        carta_error = f"Errore generazione grafico transiti premium: {e}"
+        png_base64 = None
+
+    elapsed = time.time() - start
+
+    return TransitiPremiumResponse(
+        status="ok" if png_base64 else "error",
+        elapsed=elapsed,
+        input=payload.model_dump(),
+        png_base64=png_base64,
+        carta_error=carta_error,
+    )
+
+
+# =========================================================
 # ROOT → SERVE index.html
 # =========================================================
 
 @app.get("/", response_class=HTMLResponse, tags=["Root"])
 def root():
-    """
-    Serve index.html se presente nella stessa cartella di main.py.
-    """
     index_path = Path(__file__).parent / "index.html"
     if not index_path.exists():
         return "<h1>AstroBot</h1><p>index.html non trovato.</p>"
