@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+from astrobot_core.metodi import call_ai_model  # usa il client Groq già pronto
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -87,6 +89,18 @@ class OroscopoRequest(BaseModel):
     pianeti_transito: Optional[Dict[str, Dict[str, Any]]] = None
     # opzionale: lista aspetti già calcolata dal core (pianetaA/B, tipo, orb, peso)
     aspetti: Optional[List[Aspetto]] = None
+
+class OroscopoAIRequest(BaseModel):
+    """
+    Richiesta per interpretazione AI dell'oroscopo multi-snapshot.
+
+    Ci aspettiamo che `payload_ai` sia quello prodotto da `build_oroscopo_payload_ai`
+    (meta + periodi + kb + kb_hooks).
+    """
+    scope: str = "oroscopo_ai"
+    tier: str = "free"
+    periodo: str  # "giornaliero" | "settimanale" | "mensile" | "annuale"
+    payload_ai: Dict[str, Any]
 
 
 # =========================================================
@@ -336,3 +350,92 @@ def oroscopo(req: OroscopoRequest):
         "aspetti_rilevanti": aspetti_rilevanti,
         "interpretazione_AI": None,
     }
+
+@router.post("/oroscopo_ai", summary="Oroscopo AI via Groq")
+def oroscopo_ai_endpoint(req: OroscopoAIRequest):
+    """
+    Usa il payload_ai (meta + periodi + kb) per chiamare Groq e ottenere
+    un testo di interpretazione dell'oroscopo per il periodo richiesto.
+    """
+    t0 = datetime.now()
+
+    payload_ai = req.payload_ai or {}
+    meta = payload_ai.get("meta", {}) or {}
+    periodi = payload_ai.get("periodi", {}) or {}
+    kb = payload_ai.get("kb", {}) or {}
+
+    periodo_key = req.periodo
+    periodo_data = periodi.get(periodo_key, {}) or {}
+
+    # Testo della KB (già limitato a livello di payload_ai)
+    kb_text = kb.get("combined_markdown", "") or ""
+    # Nel dubbio, un ulteriore hard-limit di sicurezza
+    kb_text = kb_text[:16000]
+
+    # Intensità: per ora stub, puoi raffinarle più avanti
+    intensities = {
+        "energy": 0.5,
+        "emotions": 0.5,
+        "relationships": 0.5,
+        "work": 0.5,
+        "luck": 0.5,
+    }
+
+    nome = meta.get("nome") or "la persona"
+    label_periodo = periodo_data.get("label") or periodo_key
+
+    # Costruiamo il prompt per Groq
+    system_msg = {
+        "role": "system",
+        "content": (
+            "Sei un astrologo professionista. "
+            "Scrivi in italiano, con tono empatico, chiaro e concreto. "
+            "Non inventare concetti fuori da ciò che ti viene fornito; "
+            "usa solo le informazioni astrologiche che ricevi in input."
+        ),
+    }
+
+    # Inseriamo meta + periodo + KB testuale
+    user_content_parts = [
+        f"Oroscopo {label_periodo} per {nome}.",
+        "",
+        "--- META ---",
+        repr(meta),
+        "",
+        f"--- DATI PERIODO ({label_periodo}) ---",
+        repr(periodo_data),
+        "",
+        "--- TESTO DALLA KNOWLEDGE BASE ---",
+        kb_text,
+        "",
+        (
+            "Scrivi un oroscopo strutturato in 4-8 paragrafi brevi, "
+            "con consigli pratici e centrati sugli aspetti indicati. "
+            "Non elencare i transiti in modo tecnico, ma integra il loro significato nel testo."
+        ),
+    ]
+    user_msg = {
+        "role": "user",
+        "content": "\n".join(user_content_parts),
+    }
+
+    # Chiamata a Groq usando il wrapper già presente in astrobot_core.metodi
+    testo_ai = call_ai_model(
+        [system_msg, user_msg],
+        max_tokens=900,
+    )
+
+    elapsed = round((datetime.now() - t0).total_seconds(), 3)
+
+    # Per ora non rimandiamo pianeti_periodo/aspetti_rilevanti (puoi arricchire in seguito)
+    return {
+        "status": "ok",
+        "scope": periodo_key,
+        "elapsed": elapsed,
+        "intensities": intensities,
+        "pianeti_periodo": [],
+        "aspetti_rilevanti": [],
+        "interpretazione_AI": testo_ai,
+    }
+
+
