@@ -1,12 +1,17 @@
 # routes_oroscopo.py - nuova versione
-
+import requests
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+
+from pydantic import BaseModel, Field
 from astrobot_core.metodi import call_ai_model  # usa il client Groq già pronto
 from pydantic import BaseModel
+import os
+import time
+import json
+from typing import Any, Dict, List, Literal, Optional
 
 router = APIRouter()
 
@@ -102,7 +107,40 @@ class OroscopoAIRequest(BaseModel):
     periodo: str  # "giornaliero" | "settimanale" | "mensile" | "annuale"
     payload_ai: Dict[str, Any]
 
+class OroscopoAIRequest(BaseModel):
+    scope: str = "oroscopo_ai"
+    tier: Literal["free", "premium"]
+    periodo: Literal["giornaliero", "settimanale", "mensile", "annuale"]
+    payload_ai: Dict[str, Any]
 
+
+class PianetaPeriodo(BaseModel):
+    pianeta: str
+    score_periodo: float
+    fattore_natale: float
+    casa_natale_transito: Optional[int] = None
+    prima_occorrenza: str
+
+
+class AspettoPeriodo(BaseModel):
+    pianeta_transito: str
+    pianeta_natale: str
+    aspetto: str
+    score_rilevanza: float
+    orb_min: float
+    n_snapshot: int
+
+
+class OroscopoAIResponse(BaseModel):
+    status: str = "ok"
+    scope: str = "oroscopo_ai"
+    periodo: str
+    tier: str
+    elapsed: float
+    intensities: Dict[str, float]
+    pianeti_periodo: List[PianetaPeriodo]
+    aspetti_rilevanti: List[AspettoPeriodo]
+    interpretazione_ai: Dict[str, Any]
 # =========================================================
 #  Funzioni di utilità
 # =========================================================
@@ -351,91 +389,295 @@ def oroscopo(req: OroscopoRequest):
         "interpretazione_AI": None,
     }
 
-@router.post("/oroscopo_ai", summary="Oroscopo AI via Groq")
-def oroscopo_ai_endpoint(req: OroscopoAIRequest):
+
+
+def _extract_period_block(payload_ai: Dict[str, Any], periodo: str) -> Dict[str, Any]:
+    periodi = payload_ai.get("periodi") or {}
+    if periodo not in periodi:
+        raise KeyError(f"Periodo '{periodo}' non presente in payload_ai.periodi.")
+    return periodi[periodo]
+
+
+def _summary_intensities(period_block: Dict[str, Any]) -> Dict[str, float]:
     """
-    Usa il payload_ai (meta + periodi + kb) per chiamare Groq e ottenere
-    un testo di interpretazione dell'oroscopo per il periodo richiesto.
+    Media delle intensities sui vari snapshot.
+    Se manca qualcosa, fallback a 0.5.
     """
-    t0 = datetime.now()
+    metriche_grafico = period_block.get("metriche_grafico") or {}
+    samples = metriche_grafico.get("samples") or []
+    if not samples:
+        return {
+            "energy": 0.5,
+            "emotions": 0.5,
+            "relationships": 0.5,
+            "work": 0.5,
+            "luck": 0.5,
+        }
 
-    payload_ai = req.payload_ai or {}
-    meta = payload_ai.get("meta", {}) or {}
-    periodi = payload_ai.get("periodi", {}) or {}
-    kb = payload_ai.get("kb", {}) or {}
+    acc: Dict[str, float] = {}
+    n = 0
+    for s in samples:
+        intens = (s.get("metrics") or {}).get("intensities") or {}
+        if not intens:
+            continue
+        for k, v in intens.items():
+            acc[k] = acc.get(k, 0.0) + float(v)
+        n += 1
 
-    periodo_key = req.periodo
-    periodo_data = periodi.get(periodo_key, {}) or {}
+    if not n:
+        return {
+            "energy": 0.5,
+            "emotions": 0.5,
+            "relationships": 0.5,
+            "work": 0.5,
+            "luck": 0.5,
+        }
 
-    # Testo della KB (già limitato a livello di payload_ai)
-    kb_text = kb.get("combined_markdown", "") or ""
-    # Nel dubbio, un ulteriore hard-limit di sicurezza
-    kb_text = kb_text[:16000]
+    return {k: v / n for k, v in acc.items()}
 
-    # Intensità: per ora stub, puoi raffinarle più avanti
-    intensities = {
-        "energy": 0.5,
-        "emotions": 0.5,
-        "relationships": 0.5,
-        "work": 0.5,
-        "luck": 0.5,
-    }
 
-    nome = meta.get("nome") or "la persona"
-    label_periodo = periodo_data.get("label") or periodo_key
+def _summary_aspetti(period_block: Dict[str, Any], max_n: int = 10) -> List[Dict[str, Any]]:
+    """
+    Prende aspetti_rilevanti già ordinati dal core e li taglia a max_n.
+    """
+    aspetti = period_block.get("aspetti_rilevanti") or []
+    out: List[Dict[str, Any]] = []
+    for a in aspetti[:max_n]:
+        out.append(
+            {
+                "pianeta_transito": a.get("pianeta_transito"),
+                "pianeta_natale": a.get("pianeta_natale"),
+                "aspetto": a.get("aspetto"),
+                "score_rilevanza": float(a.get("score_rilevanza", 0.0)),
+                "orb_min": float(a.get("orb_min", 0.0)),
+                "n_snapshot": int(a.get("n_snapshot", 0)),
+            }
+        )
+    return out
 
-    # Costruiamo il prompt per Groq
-    system_msg = {
+
+def _summary_pianeti(period_block: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Usa direttamente pianeti_prevalenti dal core (già ordinati).
+    """
+    return list(period_block.get("pianeti_prevalenti") or [])
+
+
+def _period_code_from_label(periodo: str) -> str:
+    return {
+        "giornaliero": "daily",
+        "settimanale": "weekly",
+        "mensile": "monthly",
+        "annuale": "yearly",
+    }.get(periodo, "daily")
+def _extract_period_block(payload_ai: Dict[str, Any], periodo: str) -> Dict[str, Any]:
+    periodi = payload_ai.get("periodi") or {}
+    if periodo not in periodi:
+        raise KeyError(f"Periodo '{periodo}' non presente in payload_ai.periodi.")
+    return periodi[periodo]
+
+
+def _summary_intensities(period_block: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Media delle intensities sui vari snapshot.
+    Se manca qualcosa, fallback a 0.5.
+    """
+    metriche_grafico = period_block.get("metriche_grafico") or {}
+    samples = metriche_grafico.get("samples") or []
+    if not samples:
+        return {
+            "energy": 0.5,
+            "emotions": 0.5,
+            "relationships": 0.5,
+            "work": 0.5,
+            "luck": 0.5,
+        }
+
+    acc: Dict[str, float] = {}
+    n = 0
+    for s in samples:
+        intens = (s.get("metrics") or {}).get("intensities") or {}
+        if not intens:
+            continue
+        for k, v in intens.items():
+            acc[k] = acc.get(k, 0.0) + float(v)
+        n += 1
+
+    if not n:
+        return {
+            "energy": 0.5,
+            "emotions": 0.5,
+            "relationships": 0.5,
+            "work": 0.5,
+            "luck": 0.5,
+        }
+
+    return {k: v / n for k, v in acc.items()}
+
+
+def _summary_aspetti(period_block: Dict[str, Any], max_n: int = 10) -> List[Dict[str, Any]]:
+    """
+    Prende aspetti_rilevanti già ordinati dal core e li taglia a max_n.
+    """
+    aspetti = period_block.get("aspetti_rilevanti") or []
+    out: List[Dict[str, Any]] = []
+    for a in aspetti[:max_n]:
+        out.append(
+            {
+                "pianeta_transito": a.get("pianeta_transito"),
+                "pianeta_natale": a.get("pianeta_natale"),
+                "aspetto": a.get("aspetto"),
+                "score_rilevanza": float(a.get("score_rilevanza", 0.0)),
+                "orb_min": float(a.get("orb_min", 0.0)),
+                "n_snapshot": int(a.get("n_snapshot", 0)),
+            }
+        )
+    return out
+
+
+def _summary_pianeti(period_block: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Usa direttamente pianeti_prevalenti dal core (già ordinati).
+    """
+    return list(period_block.get("pianeti_prevalenti") or [])
+
+
+def _period_code_from_label(periodo: str) -> str:
+    return {
+        "giornaliero": "daily",
+        "settimanale": "weekly",
+        "mensile": "monthly",
+        "annuale": "yearly",
+    }.get(periodo, "daily")
+def _build_groq_messages(req: OroscopoAIRequest, payload_ai: Dict[str, Any]) -> List[Dict[str, str]]:
+    meta = payload_ai.get("meta") or {}
+    period_block = _extract_period_block(payload_ai, req.periodo)
+
+    intensities = _summary_intensities(period_block)
+    pianeti = _summary_pianeti(period_block)
+    aspetti = _summary_aspetti(period_block, max_n=20)
+
+    kb_md = ((payload_ai.get("kb") or {}).get("combined_markdown")) or ""
+    # safety: tagliamo comunque a ~16K char
+    kb_md = kb_md[:16000]
+
+    system = {
         "role": "system",
         "content": (
-            "Sei un astrologo professionista. "
-            "Scrivi in italiano, con tono empatico, chiaro e concreto. "
-            "Non inventare concetti fuori da ciò che ti viene fornito; "
-            "usa solo le informazioni astrologiche che ricevi in input."
+            "Sei AstroBot, un'AI che scrive oroscopi personalizzati usando un tema natale, "
+            "una selezione di transiti e una knowledge base astrologica in markdown. "
+            "Rispondi sempre SOLO in JSON valido compatibile con lo schema richiesto. "
+            "Non includere testo libero fuori dal JSON."
         ),
     }
 
-    # Inseriamo meta + periodo + KB testuale
-    user_content_parts = [
-        f"Oroscopo {label_periodo} per {nome}.",
-        "",
-        "--- META ---",
-        repr(meta),
-        "",
-        f"--- DATI PERIODO ({label_periodo}) ---",
-        repr(periodo_data),
-        "",
-        "--- TESTO DALLA KNOWLEDGE BASE ---",
-        kb_text,
-        "",
-        (
-            "Scrivi un oroscopo strutturato in 4-8 paragrafi brevi, "
-            "con consigli pratici e centrati sugli aspetti indicati. "
-            "Non elencare i transiti in modo tecnico, ma integra il loro significato nel testo."
-        ),
-    ]
-    user_msg = {
-        "role": "user",
-        "content": "\n".join(user_content_parts),
-    }
-
-    # Chiamata a Groq usando il wrapper già presente in astrobot_core.metodi
-    testo_ai = call_ai_model(
-        [system_msg, user_msg],
-        max_tokens=900,
-    )
-
-    elapsed = round((datetime.now() - t0).total_seconds(), 3)
-
-    # Per ora non rimandiamo pianeti_periodo/aspetti_rilevanti (puoi arricchire in seguito)
-    return {
-        "status": "ok",
-        "scope": periodo_key,
-        "elapsed": elapsed,
+    user_payload = {
+        "meta": meta,
+        "tier": req.tier,
+        "periodo": req.periodo,
+        "period_code": _period_code_from_label(req.periodo),
         "intensities": intensities,
-        "pianeti_periodo": [],
-        "aspetti_rilevanti": [],
-        "interpretazione_AI": testo_ai,
+        "pianeti_prevalenti": pianeti,
+        "aspetti_rilevanti": aspetti,
+        "kb_markdown": kb_md,
     }
 
+    user = {
+        "role": "user",
+        "content": (
+            "Devi generare un oroscopo astrologico in italiano per l'utente indicato in 'meta', "
+            "per il periodo specificato in 'periodo'.\n\n"
+            "Hai a disposizione:\n"
+            "- 'intensities': valori 0..1 per energy/emotions/relationships/work/luck\n"
+            "- 'pianeti_prevalenti': pianeti di transito chiave sul periodo\n"
+            "- 'aspetti_rilevanti': lista di aspetti transito→natale più importanti\n"
+            "- 'kb_markdown': estratti di knowledge base astrologica già filtrata.\n\n"
+            "1) Leggi con attenzione il payload JSON seguente.\n"
+            "2) Usa kb_markdown come base concettuale, ma non copiarla parola per parola.\n"
+            "3) Scrivi un oroscopo strutturato in sezioni JSON, ad es.: "
+            "{ 'sintesi': '...', 'amore': '...', 'lavoro': '...', 'crescita_personale': '...' }.\n"
+            "4) Cita esplicitamente i transiti principali (pianeti e aspetti) quando rilevante.\n"
+            "5) Adatta il livello di dettaglio al tier: 'free' = breve/essenziale, 'premium' = ricco e articolato.\n\n"
+            "Restituisci SOLO un oggetto JSON con questa struttura generale:\n"
+            "{\n"
+            '  "sintesi": string,\n'
+            '  "amore": string,\n'
+            '  "lavoro": string,\n'
+            '  "crescita_personale": string,\n'
+            '  "consigli_pratici": [string, ...]\n'
+            "}\n\n"
+            "Ecco il payload da usare:\n"
+            f"{json.dumps(user_payload, ensure_ascii=False)}"
+        ),
+    }
 
+    return [system, user]
+
+@router.post("/oroscopo_ai", response_model=OroscopoAIResponse)
+async def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
+    start = time.time()
+
+    payload_ai = req.payload_ai
+    try:
+        period_block = _extract_period_block(payload_ai, req.periodo)
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    intensities = _summary_intensities(period_block)
+    pianeti = _summary_pianeti(period_block)
+    aspetti = _summary_aspetti(period_block, max_n=20)
+
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY non configurata")
+
+    messages = _build_groq_messages(req, payload_ai)
+
+    groq_body = {
+        "model": "llama-3.1-70b-versatile",
+        "messages": messages,
+        "max_tokens": 900 if req.tier == "premium" else 450,
+        "temperature": 0.9,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=groq_body,
+            timeout=60,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Errore chiamata Groq: {e}")
+
+    if resp.status_code != 200:
+        # qui vedi eventuali 401/429/503 di Groq
+        raise HTTPException(
+            status_code=502,
+            detail=f"Groq HTTP {resp.status_code}: {resp.text[:500]}",
+        )
+
+    data = resp.json()
+    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or "{}"
+
+    try:
+        interpretazione = json.loads(content)
+    except Exception:
+        # fallback se il modello non rispetta alla lettera il JSON only
+        interpretazione = {"raw": content}
+
+    elapsed = time.time() - start
+
+    return OroscopoAIResponse(
+        periodo=req.periodo,
+        tier=req.tier,
+        elapsed=elapsed,
+        intensities=intensities,
+        pianeti_periodo=[PianetaPeriodo(**p) for p in pianeti],
+        aspetti_rilevanti=[AspettoPeriodo(**a) for a in aspetti],
+        interpretazione_ai=interpretazione,
+    )
