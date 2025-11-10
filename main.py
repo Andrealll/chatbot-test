@@ -15,15 +15,36 @@ from astrobot_core.calcoli import (
     decodifica_segni,
 )
 
+from astrobot_core.transiti import calcola_transiti_data_fissa
+from astrobot_core.sinastria import sinastria as calcola_sinastria
+
 from astrobot_core.grafici import (
     grafico_tema_natal,
     grafico_sinastria,
     grafico_linee_premium,
 )
 
-# Router oroscopo (già esistente)
+# Router oroscopo
 from routes_oroscopo import router as oroscopo_router
 
+# =========================================================
+# CREAZIONE APP FASTAPI
+# =========================================================
+
+app = FastAPI()
+
+# (se hai già una configurazione CORS più giù, usa quella;
+#  altrimenti puoi lasciare questo blocco base)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include il router dell'oroscopo DOPO aver creato app
+app.include_router(oroscopo_router)
 
 # =========================================================
 # MODELLI Pydantic
@@ -38,6 +59,12 @@ class TemaRequest(BaseModel):
     domanda: Optional[str] = None
     scope: Optional[str] = "tema"
     tier: Optional[str] = "free"
+
+
+class TemaResponse(BaseModel):
+    status: str
+    elapsed: float
+    input: Dict[str, Any]
 
 
 class TemaResponse(BaseModel):
@@ -293,8 +320,16 @@ def tema_endpoint(
     response: Response,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
+    """
+    Calcola il tema natale completo (pianeti + ASC/MC/case + aspetti)
+    usando il core `astrobot_core.transiti.calcola_transiti_data_fissa`
+    e genera sia:
+    - PNG base64 del grafico polare (grafico_tema_natal)
+    - JSON leggero per frontend (build_grafico_tema_json)
+    """
     start = time.time()
 
+    # tier → cookie leggibile dal frontend
     if payload.tier:
         response.set_cookie(
             key=COOKIE_TIER,
@@ -309,6 +344,7 @@ def tema_endpoint(
     grafico_polare = None
 
     try:
+        # parsing data/ora di nascita
         dt = datetime.strptime(f"{payload.data} {payload.ora}", "%Y-%m-%d %H:%M")
         giorno = dt.day
         mese = dt.month
@@ -316,38 +352,42 @@ def tema_endpoint(
         ora = dt.hour
         minuti = dt.minute
 
-        asc_mc_case = calcola_asc_mc_case(
+        # usa il core transiti per ottenere pianeti, ASC/MC/case e aspetti del tema
+        tema_raw = calcola_transiti_data_fissa(
+            giorno=giorno,
+            mese=mese,
+            anno=anno,
+            ora=ora,
+            minuti=minuti,
             citta=payload.citta,
-            anno=anno,
-            mese=mese,
-            giorno=giorno,
-            ora=ora,
-            minuti=minuti,
-            sistema_case="equal",
+            include_node=True,
+            include_lilith=True,
         )
 
-        pianeti = calcola_pianeti_da_df(
-            df_tutti,
-            giorno=giorno,
-            mese=mese,
-            anno=anno,
-            ora=ora,
-            minuti=minuti,
-        )
-        pianeti_decod = decodifica_segni(pianeti)
+        pianeti_decod = tema_raw.get("pianeti_decod", {}) or {}
+        asc_mc_case = tema_raw.get("asc_mc_case", {}) or {}
+        aspetti = tema_raw.get("aspetti", []) or []
 
+        # payload tema arricchito con info utente
         tema = {
-            "data": dt.strftime("%Y-%m-%d %H:%M"),
+            "data": tema_raw.get("data", dt.strftime("%Y-%m-%d %H:%M")),
             "pianeti_decod": pianeti_decod,
             "asc_mc_case": asc_mc_case,
+            "aspetti": aspetti,
+            "pianeti": tema_raw.get("pianeti", {}),
+            "nome": payload.nome,
+            "email": payload.email,
+            "domanda": payload.domanda,
         }
 
+        # grafico polare PNG base64 (senza prefisso data:image)
         carta_base64 = grafico_tema_natal(
             pianeti_decod=pianeti_decod,
             asc_mc_case=asc_mc_case,
-            aspetti=None,  # quando colleghi il core aspetti, lo passi qui
+            aspetti=aspetti,
         )
 
+        # JSON per grafico polare (usato dal frontend React)
         grafico_polare = build_grafico_tema_json(tema)
 
     except Exception as e:
@@ -356,11 +396,13 @@ def tema_endpoint(
         grafico_polare = None
         carta_error = f"Errore generazione tema/carta: {e}"
 
+    # Interpretazione testuale disattivata in questa versione
     interpretazione = None
     interpretazione_error = "Interpretazione disabilitata (Groq non chiamato in questa versione)."
 
     elapsed = time.time() - start
 
+    # png_base64: con prefisso data:image per il frontend
     png_base64 = carta_base64
     if png_base64 and not png_base64.startswith("data:image/png;base64,"):
         png_base64 = "data:image/png;base64," + png_base64
@@ -389,6 +431,15 @@ def sinastria_endpoint(
     response: Response,
     cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
 ):
+    """
+    Calcola una sinastria completa usando il core
+    `astrobot_core.sinastria.sinastria`:
+
+    - Tema A (pianeti + ASC/MC/case)
+    - Tema B
+    - Aspetti A↔B con orb, conteggi e top aspetti stretti
+    - Grafico polare PNG + JSON per il frontend
+    """
     start = time.time()
 
     if payload.tier:
@@ -405,81 +456,51 @@ def sinastria_endpoint(
     grafico_polare = None
 
     try:
-        # Persona A
+        # parsing date/ora delle due persone
         dt_a = datetime.strptime(f"{payload.A.data} {payload.A.ora}", "%Y-%m-%d %H:%M")
-        g_a, m_a, a_a = dt_a.day, dt_a.month, dt_a.year
-        h_a, min_a = dt_a.hour, dt_a.minute
-
-        asc_mc_case_a = calcola_asc_mc_case(
-            citta=payload.A.citta,
-            anno=a_a,
-            mese=m_a,
-            giorno=g_a,
-            ora=h_a,
-            minuti=min_a,
-            sistema_case="equal",
-        )
-        pianeti_a = calcola_pianeti_da_df(
-            df_tutti,
-            giorno=g_a,
-            mese=m_a,
-            anno=a_a,
-            ora=h_a,
-            minuti=min_a,
-        )
-        pianeti_decod_a = decodifica_segni(pianeti_a)
-
-        # Persona B
         dt_b = datetime.strptime(f"{payload.B.data} {payload.B.ora}", "%Y-%m-%d %H:%M")
-        g_b, m_b, a_b = dt_b.day, dt_b.month, dt_b.year
-        h_b, min_b = dt_b.hour, dt_b.minute
 
-        asc_mc_case_b = calcola_asc_mc_case(
-            citta=payload.B.citta,
-            anno=a_b,
-            mese=m_b,
-            giorno=g_b,
-            ora=h_b,
-            minuti=min_b,
-            sistema_case="equal",
+        # delega il calcolo astrologico al core sinastria
+        sin_core = calcola_sinastria(
+            dt_A=dt_a,
+            citta_A=payload.A.citta,
+            dt_B=dt_b,
+            citta_B=payload.B.citta,
         )
-        pianeti_b = calcola_pianeti_da_df(
-            df_tutti,
-            giorno=g_b,
-            mese=m_b,
-            anno=a_b,
-            ora=h_b,
-            minuti=min_b,
-        )
-        pianeti_decod_b = decodifica_segni(pianeti_b)
 
-        # TODO: quando colleghi il core sinastria, calcola qui aspetti_AB
-        aspetti_AB = None
+        tema_A = sin_core.get("A", {}) or {}
+        tema_B = sin_core.get("B", {}) or {}
+        sin_info = sin_core.get("sinastria", {}) or {}
 
+        aspetti_AB = sin_info.get("aspetti_AB", []) or []
+        conteggio_per_tipo = sin_info.get("conteggio_per_tipo", {}) or {}
+        top_stretti = sin_info.get("top_stretti", []) or []
+
+        # payload sinastria restituito all'API
         sinastria_data = {
             "A": {
-                "data": dt_a.strftime("%Y-%m-%d %H:%M"),
-                "pianeti_decod": pianeti_decod_a,
-                "asc_mc_case": asc_mc_case_a,
+                **tema_A,
                 "nome": payload.A.nome or "A",
             },
             "B": {
-                "data": dt_b.strftime("%Y-%m-%d %H:%M"),
-                "pianeti_decod": pianeti_decod_b,
-                "asc_mc_case": asc_mc_case_b,
+                **tema_B,
                 "nome": payload.B.nome or "B",
             },
             "aspetti": aspetti_AB,
+            "conteggio_per_tipo": conteggio_per_tipo,
+            "top_aspetti_stretti": top_stretti,
         }
 
+        # grafico polare PNG (sinastria completa)
         carta_base64 = grafico_sinastria(
-            pianeti_A_decod=pianeti_decod_a,
-            pianeti_B_decod=pianeti_decod_b,
+            pianeti_A_decod=tema_A.get("pianeti_decod", {}) or {},
+            pianeti_B_decod=tema_B.get("pianeti_decod", {}) or {},
             aspetti_AB=aspetti_AB,
             nome_A=payload.A.nome or "A",
             nome_B=payload.B.nome or "B",
         )
 
+        # JSON per grafico polare sinastria
         grafico_polare = build_grafico_sinastria_json(sinastria_data)
 
     except Exception as e:
