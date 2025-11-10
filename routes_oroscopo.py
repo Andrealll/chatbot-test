@@ -634,7 +634,7 @@ async def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
     messages = _build_groq_messages(req, payload_ai)
 
     groq_body = {
-        "model": "llama-3.1-70b-versatile",
+        "model": "llama-3.3-70b-versatile",
         "messages": messages,
         "max_tokens": 900 if req.tier == "premium" else 450,
         "temperature": 0.9,
