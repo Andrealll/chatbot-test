@@ -83,3 +83,21 @@ def generate_with_rag(domanda: str) -> str:
     user = f"CONTESTO:\n{context}\n\nDOMANDA:\n{domanda}"
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     return call_ai_model(messages)
+
+
+def force_json_answer(messages):
+    """
+    Inserisce un messaggio finale che spinge il modello a restituire JSON valido.
+    """
+    schema_hint = (
+        "RISPOSTA: restituisci SOLO JSON valido con le seguenti chiavi:\n"
+        "{\n"
+        '  "sintesi": str,\n'
+        '  "amore": str,\n'
+        '  "lavoro": str,\n'
+        '  "crescita_personale": str,\n'
+        '  "consigli_pratici": [str, str, str, str]\n'
+        "}\n"
+        "Niente testo fuori dal JSON."
+    )
+    return messages + [{"role": "user", "content": schema_hint}]
