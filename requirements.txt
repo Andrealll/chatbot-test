@@ -11,3 +11,4 @@ groq
 openpyxl
 aioredis
 Pillow
+requests==2.32.3

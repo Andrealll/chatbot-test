@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "nome": "Junior",
+    "citta_nascita": "Napoli",
+    "data_nascita": "1986-07-19",
+    "ora_nascita": "08:50",
+    "tier": "premium",
+    "scope": "oroscopo_multi_snapshot"
+  },
+  "periodi": {
+    "giornaliero": {
+      "label": "Oroscopo di oggi",
+      "tier": "premium"
+    },
+    "settimanale": {
+      "label": "Tendenze della settimana",
+      "tier": "premium"
+    },
+    "mensile": {
+      "label": "Panorama del mese",
+      "tier": "premium"
+    },
+    "annuale": {
+      "label": "Visione dell'anno",
+      "tier": "premium"
+    }
+  }
+}
