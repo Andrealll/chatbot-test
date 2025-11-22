@@ -16,6 +16,8 @@ from astrobot_core.oroscopo_payload_ai import (
     AI_ENTITY_LIMITS,
     DEFAULT_PERIOD_KEY,
     DEFAULT_TIER,
+    build_oroscopo_payload_ai,
+    PERIOD_KEY_TO_CODE,
 )
 
 
@@ -99,6 +101,16 @@ class OroscopoAIResponse(BaseModel):
     aspetti_rilevanti: List[AspettoPeriodo]
     interpretazione_ai: Dict[str, Any]
 
+class OroscopoSiteRequest(BaseModel):
+    """
+    Richiesta semplificata che arriva dal sito DYANA.
+    """
+    nome: Optional[str] = None
+    citta: str
+    data_nascita: str        # "YYYY-MM-DD"
+    ora_nascita: str         # "HH:MM"
+    periodo: Literal["giornaliero", "settimanale", "mensile", "annuale"]
+    tier: Literal["free", "premium", "auto"] = "auto"
 
 # =========================================================
 #  Utility comuni (rimangono identiche)
@@ -131,6 +143,25 @@ class OroscopoResponse(BaseModel):
 # UTILS
 # ==========================
 >>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
+
+
+def _resolve_tier_for_site(req_tier: str) -> str:
+    """
+    Per ora:
+    - se il frontend specifica 'free' o 'premium', usiamo quello
+    - se manda 'auto' (o niente), trattiamo come 'free'
+    Più avanti qui leggeremo il JWT per capire il tier reale.
+    """
+    value = (req_tier or "").lower()
+    if value in ("free", "premium"):
+        return value
+    return "free"
+
+
+
+
+
+
 
 def _blank_png_no_prefix() -> str:
     # 1x1 pixel trasparente (senza prefisso data:image)
@@ -1141,6 +1172,89 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
             max_tokens=max_tokens,
             temperature=temperature,
         )
+        
+# TODO: quando avrai l’auth a token, potrai sostituire questa dipendenza
+# con qualcosa che ti dà il tier reale.
+def _resolve_tier_from_site(req_tier: str) -> str:
+    """
+    Per ora:
+    - se tier esplicito = "free" o "premium" → lo usiamo
+    - se tier = "auto" → trattiamo come free (più avanti leggeremo il JWT)
+    """
+    if req_tier in ("free", "premium"):
+        return req_tier
+    return "free"
+
+
+@router.post("/oroscopo_site", response_model=OroscopoAIResponse)
+def oroscopo_site_endpoint(req: OroscopoSiteRequest) -> OroscopoAIResponse:
+    """
+    Endpoint "alto livello" per il sito DYANA.
+
+    Flusso:
+    1) costruisce oroscopo_struct con la pipeline multi-snapshot
+    2) usa build_oroscopo_payload_ai(...) per creare il payload_ai
+    3) chiama la stessa logica di /oroscopo_ai, riutilizzando prompt + Claude
+    """
+
+    # 1) Normalizziamo periodo e tier
+    period_code = PERIOD_KEY_TO_CODE.get(req.periodo, "daily")  # es: "giornaliero" -> "daily"
+    effective_tier = _resolve_tier_from_site(req.tier)
+
+    # 2) Costruiamo oroscopo_struct con la tua pipeline
+    # ⚠️ QUI devi usare la funzione reale che hai in astrobot-core.
+    # Lascio un esempio generico con un TODO esplicito.
+    #
+    # Esempio (devi adattare al tuo modulo reale):
+    #
+    # from astrobot_core.oroscopo_engine import run_oroscopo_multi_snapshot
+    #
+    # oroscopo_struct = run_oroscopo_multi_snapshot(
+    #     periodo=req.periodo,           # "giornaliero"/"settimanale"/...
+    #     tier=effective_tier,
+    #     nome=req.nome,
+    #     citta=req.citta,
+    #     data_nascita=req.data_nascita,
+    #     ora_nascita=req.ora_nascita,
+    # )
+
+    # Placeholder temporaneo per non rompere nulla: struttura minima.
+    oroscopo_struct = {
+        "meta": {
+            "nome": req.nome,
+            "citta": req.citta,
+            "data_nascita": req.data_nascita,
+            "ora_nascita": req.ora_nascita,
+            "tier": effective_tier,
+            "periodo": req.periodo,
+            "lang": "it",
+        },
+        "periodo": req.periodo,
+        "periodi": {},          # la pipeline reale popolerà questa sezione
+        "tema": {},
+        "profilo_natale": {},
+        "kb_hooks": {},
+    }
+
+    # 3) Costruiamo il payload_ai con il modulo che mi hai passato
+    payload_ai = build_oroscopo_payload_ai(
+        oroscopo_struct=oroscopo_struct,
+        lang="it",
+        period_code=period_code,
+    )
+
+    # 4) Prepariamo una OroscopoAIRequest e riutilizziamo la logica di /oroscopo_ai
+    ai_req = OroscopoAIRequest(
+        scope="oroscopo_ai",
+        tier=effective_tier,
+        periodo=req.periodo,
+        payload_ai=payload_ai,
+    )
+
+    ai_resp = oroscopo_ai(ai_req)
+    return ai_resp       
+        
+
 =======
 def _build_intensities_for_dates(dates: List[date]) -> Dict[str, List[float]]:
     import math
@@ -1263,3 +1377,42 @@ async def oroscopo_endpoint(
 #  FINE FILE – routes_oroscopo.py (versione finale)
 # =========================================================
 
+@router.post("/oroscopo_site")
+def oroscopo_site(req: OroscopoSiteRequest) -> dict:
+    """
+    Endpoint *semplice* pensato per il sito DYANA.
+
+    In questo step è solo uno STUB:
+    - non usa ancora la pipeline vera,
+    - non chiama ancora build_oroscopo_payload_ai,
+    - non chiama ancora Claude.
+
+    Serve solo per:
+    - verificare che la route funzioni,
+    - definire la struttura base della risposta,
+    - prepararci a collegare, passo dopo passo, la pipeline reale.
+    """
+    effective_tier = _resolve_tier_for_site(req.tier)
+
+    # Qui per ora facciamo SOLO eco dei dati ricevuti,
+    # con un messaggio "TODO" ben chiaro.
+    return {
+        "status": "ok",
+        "scope": req.periodo,
+        "engine": "site_stub",
+        "tier": effective_tier,
+        "input": {
+            "nome": req.nome,
+            "citta": req.citta,
+            "data_nascita": req.data_nascita,
+            "ora_nascita": req.ora_nascita,
+            "periodo": req.periodo,
+            "tier": req.tier,
+        },
+        "result": {
+            "meta": {
+                "msg": "Stub oroscopo_site: la pipeline AI non è ancora collegata.",
+                "nota": "Prossimo step: usare run_oroscopo_multi_snapshot + build_oroscopo_struct_from_pipe + build_oroscopo_payload_ai.",
+            }
+        },
+    }

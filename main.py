@@ -420,7 +420,7 @@ def tema_ai_endpoint(
         - result: JSON strutturato (personalita/talenti/sfide)
         - ai_debug: raw_text + usage + cost_usd + elapsed_sec
     """
-    import json  # sicurezza, nel dubbio
+    import json
 
     start = time.time()
 
@@ -428,7 +428,7 @@ def tema_ai_endpoint(
     effective_role = payload.tier or "free"
     response.set_cookie(key=COOKIE_TIER, value=effective_role, httponly=False, samesite="lax")
 
-    tema = None
+    tema: Dict[str, Any] = {}
 
     # 1) Calcolo tema (con fallback se astrobot_core non c'è)
     try:
@@ -528,9 +528,6 @@ def tema_ai_endpoint(
         ai_debug=claude_debug,
         role=effective_role,
     )
-
-
-print("[DEBUG] /tema_ai defined")
 
 
 # ---------------------------------------------------------
