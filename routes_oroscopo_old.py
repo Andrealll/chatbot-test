@@ -110,6 +110,10 @@ class OroscopoAIRequest(BaseModel):
     scope: Literal["oroscopo_ai"] = "oroscopo_ai"
     tier: Literal["free", "premium"]
     periodo: Literal["giornaliero", "settimanale", "mensile", "annuale"]
+<<<<<<< HEAD
+=======
+    # payload_ai: quello prodotto da build_oroscopo_payload_ai (core)
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     payload_ai: Dict[str, Any]
 
 class OroscopoAIResponse(BaseModel):
@@ -277,6 +281,10 @@ def _summary_intensities(period_block: Dict[str, Any]) -> Dict[str, float]:
     - se esiste 'intensita_mensile' (nuovo mensile) → usa quello;
     - altrimenti media le intensità dei samples in metriche_grafico.
     """
+<<<<<<< HEAD
+=======
+    # Preferisci intensità mensili esplicite se presenti (nuovo mensile)
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     explic = period_block.get("intensita_mensile")
     if isinstance(explic, dict) and explic:
         return explic
@@ -327,16 +335,26 @@ def _period_code_from_label(periodo: str) -> str:
 
 
 # =========================================================
+<<<<<<< HEAD
 #  PROMPT PER GROQ — MULTI-PERIODO / MULTI-TIER
 # =========================================================
 
 def _build_messages_giornaliero(
     tier: str,
+=======
+#  NUOVO: builder messaggi Groq (mensile a capitoli + generico)
+# =========================================================
+
+def _build_messages_generico(
+    tier: str,
+    periodo: str,
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     meta: Dict[str, Any],
     period_block: Dict[str, Any],
     kb_md: str,
 ) -> List[Dict[str, str]]:
     """
+<<<<<<< HEAD
     Giornaliero:
 
     FREE:
@@ -422,10 +440,89 @@ Usa:
 
 DEVI restituire SOLO un oggetto JSON con quella struttura.
 Nessun testo fuori dal JSON. Nessun campo extra.
+=======
+    Schema "classico" per giornaliero/settimanale/annuale:
+
+    {
+      "sintesi": "...",
+      "amore": "...",
+      "lavoro": "...",
+      "crescita_personale": "...",
+      "consigli_pratici": ["...", "..."]
+    }
+    """
+    period_code = _period_code_from_label(periodo)
+    intensities = _summary_intensities(period_block)
+    pianeti = _summary_pianeti(period_block)
+    aspetti = _summary_aspetti(period_block, max_n=20)
+
+    system_content = f"""
+Sei AstroBot, un assistente AI di astrologia psicologica moderna.
+Parli in italiano chiaro, contemporaneo, con un tono empatico ma concreto,
+adatto a un pubblico adulto e professionale (es. LinkedIn, blog).
+
+RICEVI:
+- i dati di base della persona (meta)
+- un singolo periodo (giornaliero/settimanale/annuale) con:
+  - intensità per aree della vita (energy, emotions, relationships, work, luck)
+  - transiti e aspetti rilevanti del periodo
+  - contenuto di Knowledge Base (markdown) già filtrato
+
+OBIETTIVO:
+- Generare un oroscopo PERSONALIZZATO per il periodo.
+- Devi usare in modo coerente:
+  - le INTENSITÀ: se un punteggio è alto, enfatizza quell'area; se è basso, evidenzia possibili sfide.
+  - i TRANSITI: cita alcuni pianeti/aspetti rilevanti e collegali al vissuto psicologico.
+  - la KNOWLEDGE BASE: usala come ispirazione, non copiarla parola per parola.
+
+STILE:
+- Niente toni fatalistici o catastrofici.
+- Sii incoraggiante ma realistico.
+- Evita frasi troppo vaghe o da "oroscopo da giornale".
+- Non dare consigli medici, finanziari o legali.
+
+DIFFERENZA FREE vs PREMIUM:
+
+- TIER = "free":
+  - Testo complessivo più BREVE.
+  - Max 2 paragrafi complessivi sommando sintesi + amore + lavoro + crescita_personale.
+  - 1 o 2 consigli_pratici brevi e molto concreti.
+
+- TIER = "premium":
+  - Testo più RICCO e strutturato.
+  - Ogni sezione (sintesi, amore, lavoro, crescita_personale) deve avere contenuto distinto e più sviluppato.
+  - consigli_pratici deve essere una lista di 3-5 punti operativi, specifici.
+
+FORMATO DI OUTPUT (SOLO JSON):
+
+Devi restituire SOLO un oggetto JSON con struttura ESATTA:
+
+{{
+  "sintesi": "stringa con la visione generale del periodo",
+  "amore": "stringa focalizzata su amore/relazioni",
+  "lavoro": "stringa focalizzata su lavoro/carriera/denaro",
+  "crescita_personale": "stringa focalizzata su benessere interiore e sviluppo personale",
+  "consigli_pratici": [
+    "consiglio 1",
+    "consiglio 2"
+  ]
+}}
+
+IMPORTANTISSIMO:
+- Nessun testo fuori dal JSON.
+- Nessun commento, spiegazione o markup aggiuntivo.
+- Nessun campo extra nel JSON, solo quelli indicati.
+- Scrivi SEMPRE in italiano.
+- Rispetta le differenze di lunghezza tra FREE e PREMIUM.
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
 """.strip()
 
     user_payload = {
         "tier": tier,
+<<<<<<< HEAD
+=======
+        "period_code": period_code,
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
         "meta": {
             "nome": meta.get("nome"),
             "citta": meta.get("citta"),
@@ -434,8 +531,13 @@ Nessun testo fuori dal JSON. Nessun campo extra.
             "lang": meta.get("lang", "it"),
         },
         "periodo": {
+<<<<<<< HEAD
             "key": "giornaliero",
             "label": period_block.get("label", "Oroscopo di oggi"),
+=======
+            "key": periodo,
+            "label": period_block.get("label", periodo),
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
             "date_range": period_block.get("date_range"),
             "intensita": intensities,
             "pianeti_prevalenti": pianeti,
@@ -444,6 +546,7 @@ Nessun testo fuori dal JSON. Nessun campo extra.
         "kb_markdown": kb_md,
     }
 
+<<<<<<< HEAD
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -542,6 +645,17 @@ Nessun testo fuori dal JSON. Nessun campo extra.
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+=======
+    user_content = (
+        "Di seguito trovi il contesto per generare l'oroscopo.\n\n"
+        "CONTESTO_JSON:\n"
+        + json.dumps(user_payload, ensure_ascii=False)
+    )
+
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     ]
 
 
@@ -552,6 +666,7 @@ def _build_messages_mensile(
     kb_md: str,
 ) -> List[Dict[str, str]]:
     """
+<<<<<<< HEAD
     Mensile:
 
     FREE:
@@ -627,6 +742,135 @@ Usa:
 - kb_markdown va usata come ispirazione concettuale, NON copiata.
 
 Nessun testo fuori dal JSON. Nessun campo extra.
+=======
+    Caso specifico: PERIODO MENSILE con sottoperiodi.
+
+    Schema di OUTPUT richiesto:
+
+    {
+      "sintesi_mensile": "...",
+      "capitoli": [
+        {
+          "id": "inizio_mese",
+          "titolo": "Inizio mese (1–10)",
+          "sintesi": "...",
+          "amore": "...",
+          "lavoro": "...",
+          "crescita_personale": "...",
+          "consigli_pratici": ["...", "..."]
+        },
+        ...
+      ]
+    }
+    """
+    intensita_mensile = mensile_block.get("intensita_mensile", {})
+    date_range = mensile_block.get("date_range")
+    sottoperiodi_raw = mensile_block.get("sottoperiodi") or mensile_block.get("mensile_sottoperiodi") or []
+
+    system_content = f"""
+Sei AstroBot, un assistente AI di astrologia psicologica moderna.
+Parli in italiano chiaro, contemporaneo, con un tono empatico ma concreto,
+adatto a un pubblico adulto e professionale (es. LinkedIn, blog).
+
+RICEVI:
+- i dati di base della persona (meta)
+- la fotografia di un PERIODO MENSILE,
+  con:
+  - intensità complessive del mese (intensita_mensile)
+  - suddivisione del mese in 4 sottoperiodi (capitoli):
+    * inizio_mese (1–10)
+    * meta_mese (11–20)
+    * fine_mese (21–fine mese)
+    * inizio_mese_successivo (es. 1–7 del mese dopo)
+  - per ogni sottoperiodo:
+    * intensità specifiche
+    * pianeti_prevalenti (transiti chiave)
+    * aspetti_rilevanti (transito → pianeta natale)
+  - un testo di Knowledge Base (markdown) già filtrato sui transiti principali.
+
+OBIETTIVO:
+- Scrivere un OROSCOPO MENSILE STRUTTURATO in 5 parti:
+  1) una SINTESI_MENSILE che riassuma le tendenze generali del mese,
+     integrando intensità_mensile e i temi ricorrenti dei sottoperiodi.
+  2) 4 CAPITOLI, uno per ogni sottoperiodo:
+       - inizio_mese
+       - meta_mese
+       - fine_mese
+       - inizio_mese_successivo
+
+Per ogni CAPITOLO devi:
+- usare soprattutto i transiti e le intensità di quel sottoperiodo;
+- evidenziare cosa cambia rispetto agli altri momenti del mese;
+- parlare nelle sezioni:
+    * sintesi
+    * amore (relazioni, vita privata)
+    * lavoro (carriera, progetti, denaro)
+    * crescita_personale (benessere interiore, mindset, sviluppo personale)
+    * consigli_pratici (1 lista di azioni concrete)
+
+UTILIZZO di INTENSITÀ, TRANSITI e KB:
+- Le INTENSITÀ guidano quanto enfatizzare un ambito (se alto → molto presente, se basso → area più neutra o sfidante).
+- I TRANSITI (pianeti_prevalenti + aspetti_rilevanti) danno colore astrologico:
+  cita alcuni transiti significativi, ma non elencarli tutti in modo meccanico.
+- La KNOWLEDGE BASE in markdown serve per approfondire il significato dei transiti:
+  leggila "mentalmente", ma non copiarla parola per parola; riformula con stile naturale.
+
+STILE:
+- Linguaggio chiaro, moderno, niente toni fatalistici o catastrofici.
+- Sii incoraggiante, ma non promettere miracoli.
+- Evita frasi da "oroscopo da giornale".
+- Non dare consigli medici, finanziari o legali.
+- Adatto a un pubblico che potrebbe leggere su LinkedIn o su un blog di crescita personale.
+
+DIFFERENZA FREE vs PREMIUM:
+
+- TIER = "free":
+  - Testo complessivo PIÙ BREVE.
+  - "sintesi_mensile": massimo 1 paragrafo.
+  - Per ogni capitolo:
+      * "sintesi" breve (2-3 frasi) che unisce amore/lavoro/crescita in modo sintetico.
+      * campi "amore", "lavoro", "crescita_personale" possono essere molto brevi o coincidere con la sintesi.
+      * "consigli_pratici": 1 o 2 frasi al massimo.
+
+- TIER = "premium":
+  - Testo PIÙ RICCO e STRUTTURATO.
+  - "sintesi_mensile": può avere 1-2 paragrafi, con una visione ampia.
+  - Per ogni capitolo:
+      * "sintesi": paragrafo dedicato.
+      * "amore": paragrafo dedicato.
+      * "lavoro": paragrafo dedicato.
+      * "crescita_personale": paragrafo dedicato.
+      * "consigli_pratici": lista di 3-5 punti molto concreti, azionabili.
+
+FORMATO DI OUTPUT (SOLO JSON):
+
+Devi restituire SOLO un oggetto JSON con struttura ESATTA:
+
+{{
+  "sintesi_mensile": "stringa con visione generale del mese",
+  "capitoli": [
+    {{
+      "id": "inizio_mese",
+      "titolo": "Inizio mese (1–10)",
+      "sintesi": "testo sintetico per il sottoperiodo",
+      "amore": "testo focalizzato sulle relazioni in quel sottoperiodo",
+      "lavoro": "testo focalizzato su lavoro/denaro in quel sottoperiodo",
+      "crescita_personale": "testo focalizzato su benessere e sviluppo interiore",
+      "consigli_pratici": [
+        "consiglio 1",
+        "consiglio 2"
+      ]
+    }}
+  ]
+}}
+
+IMPORTANTISSIMO:
+- Nessun testo fuori dal JSON.
+- Nessun commento, spiegazione o markup aggiuntivo.
+- Nessun campo extra nel JSON, solo quelli indicati.
+- Scrivi SEMPRE in italiano.
+- Rispetta le differenze tra FREE e PREMIUM nella lunghezza e nel dettaglio.
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
 """.strip()
 
     sottoperiodi_slim = []
@@ -661,6 +905,7 @@ Nessun testo fuori dal JSON. Nessun campo extra.
         "kb_markdown": kb_md,
     }
 
+<<<<<<< HEAD
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -819,12 +1064,39 @@ def _build_groq_messages(req: OroscopoAIRequest, payload_ai: Dict[str, Any]) -> 
         kb_md = kb_md[:4000]
 
     periodo = req.periodo
+=======
+    user_content = (
+        "Di seguito trovi il contesto per generare l'oroscopo mensile strutturato.\n\n"
+        "CONTESTO_JSON:\n"
+        + json.dumps(user_payload, ensure_ascii=False)
+    )
+
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _build_groq_messages(req: OroscopoAIRequest, payload_ai: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Smista tra:
+    - builder generico (giornaliero/settimanale/annuale)
+    - builder mensile a 4 capitoli
+    """
+    meta = payload_ai.get("meta") or {}
+    kb_md = ((payload_ai.get("kb") or {}).get("combined_markdown")) or ""
+    kb_md = kb_md[:16000]  # safety
+
+    periodo = req.periodo
+    period_code = _period_code_from_label(periodo)
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     period_block = _extract_period_block(payload_ai, periodo)
 
     tier = req.tier.lower()
     if tier not in {"free", "premium"}:
         tier = "free"
 
+<<<<<<< HEAD
     periodo_norm = normalizza_scope(periodo)
 
     if periodo_norm == "giornaliero":
@@ -842,21 +1114,34 @@ def _build_groq_messages(req: OroscopoAIRequest, payload_ai: Dict[str, Any]) -> 
             kb_md=kb_md,
         )
     elif periodo_norm == "mensile":
+=======
+    if period_code == "monthly":
+        # caso speciale: mensile a 4 capitoli
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
         return _build_messages_mensile(
             tier=tier,
             meta=meta,
             mensile_block=period_block,
             kb_md=kb_md,
         )
+<<<<<<< HEAD
     else:  # annuale (o fallback)
         return _build_messages_annuale(
             tier=tier,
+=======
+    else:
+        # caso generico: schema classico
+        return _build_messages_generico(
+            tier=tier,
+            periodo=periodo,
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
             meta=meta,
             period_block=period_block,
             kb_md=kb_md,
         )
 
 
+<<<<<<< HEAD
 
 # =========================================================
 #  Helper parsing robusto JSON da Groq
@@ -919,6 +1204,10 @@ def _parse_groq_json_safely(content: str) -> Dict[str, Any]:
 
 # =========================================================
 #  Endpoint: /oroscopo_ai  (usa Groq SENZA response_format)
+=======
+# =========================================================
+#  Endpoint: /oroscopo_ai  (usa Groq con response_format=json_object)
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
 # =========================================================
 
 @router.post("/oroscopo_ai", response_model=OroscopoAIResponse)
@@ -931,6 +1220,10 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
     except KeyError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+<<<<<<< HEAD
+=======
+    # Intensità/pianeti/aspetti di riepilogo (per risposta API)
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     intensities = _summary_intensities(period_block)
     pianeti = _summary_pianeti(period_block)
     aspetti = _summary_aspetti(period_block, max_n=20)
@@ -941,6 +1234,7 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
 
     messages = _build_groq_messages(req, payload_ai)
 
+<<<<<<< HEAD
     max_tokens = 650 if req.tier == "premium" else 400
 
     groq_body = {
@@ -949,6 +1243,14 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
         "max_tokens": max_tokens,
         "temperature": float(os.environ.get("AI_TEMPERATURE", "0.7")),
         # 👉 NIENTE response_format qui
+=======
+    groq_body = {
+        "model": os.environ.get("AI_MODEL", "llama-3.3-70b-versatile"),
+        "messages": messages,
+        "max_tokens": 900 if req.tier == "premium" else 450,
+        "temperature": float(os.environ.get("AI_TEMPERATURE", "0.7")),
+        "response_format": {"type": "json_object"},
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     }
 
     try:
@@ -973,7 +1275,15 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
     data = resp.json()
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or "{}"
 
+<<<<<<< HEAD
     interpretazione = _parse_groq_json_safely(content)
+=======
+    try:
+        interpretazione = json.loads(content)
+    except Exception:
+        interpretazione = {"raw": content}  # fallback
+
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
     elapsed = time.time() - start
 
     return OroscopoAIResponse(

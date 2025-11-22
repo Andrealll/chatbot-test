@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # =========================================================
 #  routes_oroscopo.py — AstroBot (oroscopo + oroscopo_ai)
 #  Versione rifatta con unico super-prompt /oroscopo_ai
@@ -25,58 +26,28 @@ router = APIRouter()
 # =========================================================
 #  Pesi pianeti per periodo (rimangono IDENTICI)
 # =========================================================
+=======
+# routes_oroscopo.py
 
-PESI_PIANETI_PER_PERIODO: Dict[str, Dict[str, float]] = {
-    "giornaliero": {
-        "Luna":     1.0,
-        "Mercurio": 0.7,
-        "Venere":   0.7,
-        "Sole":     0.4,
-        "Marte":    0.3,
-        "Giove":    0.3,
-        "Saturno":  0.2,
-        "Urano":    0.2,
-        "Nettuno":  0.2,
-        "Plutone":  0.2,
-    },
-    "settimanale": {
-        "Luna":     0.5,
-        "Mercurio": 1.0,
-        "Venere":   1.0,
-        "Sole":     0.8,
-        "Marte":    0.7,
-        "Giove":    0.4,
-        "Saturno":  0.3,
-        "Urano":    0.3,
-        "Nettuno":  0.3,
-        "Plutone":  0.3,
-    },
-    "mensile": {
-        "Luna":     0.5,
-        "Mercurio": 0.7,
-        "Venere":   0.7,
-        "Sole":     1.0,
-        "Marte":    1.0,
-        "Giove":    0.7,
-        "Saturno":  0.6,
-        "Urano":    0.6,
-        "Nettuno":  0.6,
-        "Plutone":  0.6,
-    },
-    "annuale": {
-        "Luna":     0.0,
-        "Mercurio": 0.3,
-        "Venere":   0.3,
-        "Sole":     0.4,
-        "Marte":    0.6,
-        "Giove":    0.8,
-        "Saturno":  1.0,
-        "Urano":    1.0,
-        "Nettuno":  1.0,
-        "Plutone":  1.0,
-    },
-}
+from datetime import date, timedelta
+from typing import Optional, Literal, Dict, Any, List
 
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
+
+router = APIRouter(
+    prefix="/oroscopo",
+    tags=["oroscopo"],
+)
+
+# ==========================
+# MODELLI
+# ==========================
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
+
+ScopeType = Literal["daily", "weekly", "monthly", "yearly"]
+
+<<<<<<< HEAD
 SOGLIA_PESO = 0.7
 
 # =========================================================
@@ -132,25 +103,40 @@ class OroscopoAIResponse(BaseModel):
 # =========================================================
 #  Utility comuni (rimangono identiche)
 # =========================================================
+=======
 
-def normalizza_scope(scope: str) -> str:
-    scope = (scope or "").lower()
-    mapping = {
-        "giorno": "giornaliero",
-        "giornaliero": "giornaliero",
-        "daily": "giornaliero",
-        "settimana": "settimanale",
-        "settimanale": "settimanale",
-        "weekly": "settimanale",
-        "mese": "mensile",
-        "mensile": "mensile",
-        "monthly": "mensile",
-        "anno": "annuale",
-        "annuale": "annuale",
-        "yearly": "annuale",
-    }
-    return mapping.get(scope, "giornaliero")
+class OroscopoRequest(BaseModel):
+    """
+    Input minimale e compatibile con /tema:
+    - citta: metadata
+    - data: riferimento per lo scope
+    """
+    citta: str
+    data: date
+    nome: Optional[str] = None
+    email: Optional[str] = None
+    domanda: Optional[str] = None
+    tier: Optional[str] = "free"
 
+
+class OroscopoResponse(BaseModel):
+    status: str
+    scope: ScopeType
+    engine: Literal["legacy", "new"]
+    input: Dict[str, Any]
+    result: Dict[str, Any]   # payload specifico dell’oroscopo
+
+
+# ==========================
+# UTILS
+# ==========================
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
+
+def _blank_png_no_prefix() -> str:
+    # 1x1 pixel trasparente (senza prefisso data:image)
+    return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+
+<<<<<<< HEAD
 
 def pianeti_rilevanti(scope: str) -> List[str]:
     scope = normalizza_scope(scope)
@@ -264,25 +250,42 @@ def oroscopo(req: OroscopoRequest):
 
     return {
         "status": "ok",
+=======
+
+# ==========================
+# MOTORI (LEGACY + NEW)
+# ==========================
+
+def calcola_oroscopo_legacy(scope: ScopeType, payload: OroscopoRequest) -> Dict[str, Any]:
+    return {
+        "engine_version": "legacy",
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
         "scope": scope,
-        "elapsed": elapsed,
-        "intensities": intensities,
-        "pianeti_periodo": pianeti_periodo,
-        "aspetti_rilevanti": aspetti_rilevanti,
-        "interpretazione_AI": None,
+        "note": "Motore legacy non collegato: usa X-Engine: new per la pipeline nuova.",
     }
 
 
+<<<<<<< HEAD
 # =========================================================
 #  Helpers per /oroscopo_ai
 # =========================================================
+=======
+def _build_date_series(scope: ScopeType, base_date: date) -> List[date]:
+    if scope == "daily":
+        return [base_date]
+    if scope == "weekly":
+        return [base_date + timedelta(days=i) for i in range(7)]
+    if scope == "monthly":
+        start = base_date - timedelta(days=14)
+        return [start + timedelta(days=i) for i in range(30)]
+    if scope == "yearly":
+        start = date(base_date.year, 1, 1)
+        return [start + timedelta(days=30 * i) for i in range(12)]
+    return [base_date]
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
 
-def _extract_period_block(payload_ai: Dict[str, Any], periodo: str) -> Dict[str, Any]:
-    periodi = payload_ai.get("periodi") or {}
-    if periodo not in periodi:
-        raise KeyError(f"Periodo '{periodo}' non presente in payload_ai.periodi.")
-    return periodi[periodo]
 
+<<<<<<< HEAD
 
 def _summary_intensities(period_block: Dict[str, Any]) -> Dict[str, float]:
     explic = period_block.get("intensita_mensile")
@@ -1138,17 +1141,123 @@ def oroscopo_ai(req: OroscopoAIRequest) -> OroscopoAIResponse:
             max_tokens=max_tokens,
             temperature=temperature,
         )
+=======
+def _build_intensities_for_dates(dates: List[date]) -> Dict[str, List[float]]:
+    import math
+    n = len(dates)
+    if n == 0:
+        return {k: [] for k in ["energy","emotions","relationships","work","luck"]}
+    base_ord = dates[0].toordinal()
 
-    elapsed = time.time() - start
+    def norm_sin(idx: int, freq: float, phase: float = 0.0, amp: float = 0.40, bias: float = 0.5) -> float:
+        x = idx / max(n - 1, 1)
+        val = math.sin(2 * math.pi * (freq * x + phase + base_ord * 0.01))
+        out = bias + amp * val
+        return 0.0 if out < 0.0 else 1.0 if out > 1.0 else out
 
-    return OroscopoAIResponse(
-        periodo=req.periodo,
-        tier=req.tier,
-        elapsed=elapsed,
-        intensities=intensities,
-        pianeti_periodo=[PianetaPeriodo(**p) for p in pianeti],
-        aspetti_rilevanti=[AspettoPeriodo(**a) for a in aspetti],
-        interpretazione_ai=interpretazione,
+    energy        = [norm_sin(i, freq=0.9, phase=0.1) for i in range(n)]
+    emotions      = [norm_sin(i, freq=0.7, phase=0.35) for i in range(n)]
+    relationships = [norm_sin(i, freq=0.8, phase=0.55) for i in range(n)]
+    work          = [norm_sin(i, freq=1.1, phase=0.2, amp=0.45) for i in range(n)]
+    luck          = [norm_sin(i, freq=0.5, phase=0.8, amp=0.35, bias=0.55) for i in range(n)]
+
+    return {
+        "energy": energy,
+        "emotions": emotions,
+        "relationships": relationships,
+        "work": work,
+        "luck": luck,
+    }
+
+
+def _build_label_map_it() -> Dict[str, str]:
+    return {
+        "energy": "Energia",
+        "emotions": "Emozioni",
+        "relationships": "Relazioni",
+        "work": "Lavoro",
+        "luck": "Fortuna",
+    }
+
+
+def calcola_oroscopo_new(scope: ScopeType, payload: OroscopoRequest) -> Dict[str, Any]:
+    """
+    Motore NEW:
+    - genera date + intensità 0–1 (5 domini)
+    - prova a renderizzare il grafico a linee premium dal core
+      con fallback a PNG trasparente se il modulo non è disponibile.
+    """
+    # 1) serie di date
+    date_list = _build_date_series(scope, payload.data)
+    date_strings = [d.isoformat() for d in date_list]
+
+    # 2) intensità sintetiche
+    intensities = _build_intensities_for_dates(date_list)
+
+    # 3) grafico (import lazy + fallback)
+    label_map = _build_label_map_it()
+    png_base64 = None
+    try:
+        from astrobot_core.grafici import grafico_linee_premium  # <-- import lazy
+        png_base64 = grafico_linee_premium(
+            date_strings=date_strings,
+            intensities_series=intensities,
+            scope=scope,
+            label_map=label_map,
+        )
+    except Exception:
+        png_base64 = _blank_png_no_prefix()
+>>>>>>> 9a8b3bf3aa79f42286c8a38433954d6a49cc8a72
+
+    if png_base64 and not png_base64.startswith("data:image/png;base64,"):
+        png_base64_with_prefix = "data:image/png;base64," + png_base64
+    else:
+        png_base64_with_prefix = png_base64
+
+    return {
+        "engine_version": "new",
+        "scope": scope,
+        "meta": {
+            "citta": payload.citta,
+            "nome": payload.nome,
+            "email": payload.email,
+            "domanda": payload.domanda,
+        },
+        "dates": date_strings,
+        "intensities": intensities,
+        "grafico_linee_png": png_base64_with_prefix,
+    }
+
+
+# ==========================
+# ROUTE UNICA /oroscopo/{scope}
+# ==========================
+
+@router.post("/{scope}", response_model=OroscopoResponse)
+async def oroscopo_endpoint(
+    scope: ScopeType,
+    payload: OroscopoRequest,
+    x_engine: Optional[str] = Header(default=None, alias="X-Engine"),
+):
+    """
+    POST /oroscopo/{daily|weekly|monthly|yearly}
+    - se X-Engine: new → usa il motore nuovo
+    - altrimenti → motore legacy (backward compatibility)
+    """
+    engine_flag = (x_engine or "").lower().strip()
+    if engine_flag not in ("", "new"):
+        raise HTTPException(status_code=400, detail="Valore X-Engine non valido. Usa 'new' oppure ometti l'header.")
+
+    use_new_engine = engine_flag == "new"
+    result = calcola_oroscopo_new(scope, payload) if use_new_engine else calcola_oroscopo_legacy(scope, payload)
+    engine_name = "new" if use_new_engine else "legacy"
+
+    return OroscopoResponse(
+        status="ok",
+        scope=scope,
+        engine=engine_name,
+        input=payload.model_dump(),
+        result=result,
     )
 # =========================================================
 #  FINE FILE – routes_oroscopo.py (versione finale)
