@@ -30,7 +30,7 @@ def _get_client() -> Anthropic:
 
 
 # =====================================================================
-# PROMPT FREE / PREMIUM – NUOVA VERSIONE
+# PROMPT FREE / PREMIUM – VERSIONE ORIGINALE
 # =====================================================================
 
 def _build_system_prompt_tema_free() -> str:
@@ -78,10 +78,6 @@ def _build_user_prompt_tema_free(payload_ai: Dict[str, Any]) -> str:
 
 
 def _build_user_prompt_tema_premium(payload_ai: Dict[str, Any]) -> str:
-    """
-    Il prompt premium non richiede modifiche extra,
-    passiamo l'intero payload come contenuto.
-    """
     return json.dumps(payload_ai, ensure_ascii=False)
 
 
@@ -129,6 +125,41 @@ def _build_debug_dict(
 
 
 # =====================================================================
+# PARSE del JSON prodotto da Claude
+# =====================================================================
+
+def _parse_claude_json(raw_text: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Claude a volte restituisce:
+    - testo puro
+    - JSON con rumore
+    - JSON dentro triple backticks
+    - JSON preceduto/seguito da testo
+    """
+
+    if not raw_text or raw_text.strip() == "":
+        return None, "Risposta vuota."
+
+    txt = raw_text.strip()
+
+    # Caso perfetto: JSON nudo
+    if txt.startswith("{") and txt.endswith("}"):
+        try:
+            return json.loads(txt), None
+        except Exception as e:
+            return None, f"Errore parse JSON diretto: {e}"
+
+    # Cerco il primo '{' e ultimo '}'
+    try:
+        start = txt.index("{")
+        end = txt.rindex("}") + 1
+        snippet = txt[start:end]
+        return json.loads(snippet), None
+    except Exception as e:
+        return None, f"Errore parse JSON da estrazione: {e}"
+
+
+# =====================================================================
 # TEMA NATALE - Claude
 # =====================================================================
 
@@ -137,9 +168,6 @@ def call_claude_tema_ai(payload_ai: Dict[str, Any], tier: str = "free") -> Dict[
     client = _get_client()
     model = ANTHROPIC_MODEL_TEMA
 
-    # ---------------------------------------------
-    # Selezione prompt in base al tier
-    # ---------------------------------------------
     if tier == "premium":
         system_prompt = _build_system_prompt_tema_premium()
         user_prompt = _build_user_prompt_tema_premium(payload_ai)
@@ -195,4 +223,35 @@ def call_claude_tema_ai(payload_ai: Dict[str, Any], tier: str = "free") -> Dict[
         error=error_msg,
     )
 
-    return debug
+    # ===============================================================
+    # PARSING JSON → result
+    # ===============================================================
+    if error_msg:
+        return {
+            "result": {
+                "error": "Errore API Claude",
+                "detail": error_msg,
+                "raw_preview": raw_text[:500],
+            },
+            "ai_debug": debug,
+        }
+
+    parsed, parse_err = _parse_claude_json(raw_text)
+
+    if parse_err or parsed is None:
+        return {
+            "result": {
+                "error": "JSON non valido",
+                "parse_error": parse_err,
+                "raw_preview": raw_text[:500],
+            },
+            "ai_debug": debug,
+        }
+
+    # ===============================================================
+    # OK: ritorno il JSON interpretazione + debug
+    # ===============================================================
+    return {
+        "result": parsed,
+        "ai_debug": debug,
+    }
