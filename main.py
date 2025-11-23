@@ -2,14 +2,10 @@ from fastapi import FastAPI, Depends, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-import time, uuid, json
+from typing import Optional, Dict, Any, List, Literal  # ← AGGIUNTO Literal
+import time, uuid
 from datetime import datetime
 from pathlib import Path
-
-# >>> NEW IMPORTS PER TEMA_AI <<<
-from ai_claude import call_claude_tema_ai
-from utils.payload_tema_ai import build_payload_tema_ai
 
 print("[DEBUG] main import start")
 
@@ -27,7 +23,7 @@ except Exception as e:
     def sign_jwt(sub: str, role: str, name: Optional[str] = None, email: Optional[str] = None) -> str:
         return f"dummy.{role}.{sub}"
 
-    def get_user_context_required():
+    def get_current_user_required():
         raise RuntimeError("Security non disponibile in locale: controlla security.py e .env")
 
 
@@ -121,18 +117,6 @@ class TemaResponse(BaseModel):
     role: Optional[str] = None   # 👈 ruolo effettivo (free/premium) letto dal token
 
 
-# >>> NEW: RESPONSE MODEL PER /tema_ai <<<
-class TemaAIResponse(BaseModel):
-    status: str
-    elapsed: float
-    input: Dict[str, Any]
-    tema: Optional[Dict[str, Any]] = None
-    payload_ai: Optional[Dict[str, Any]] = None
-    result: Optional[Dict[str, Any]] = None
-    ai_debug: Optional[Dict[str, Any]] = None
-    role: Optional[str] = None
-
-
 class Persona(BaseModel):
     citta: str
     data: str
@@ -179,6 +163,19 @@ class TokenRequest(BaseModel):
     email: Optional[str] = None
 
 
+# 👇 AGGIUNTO: modello semplificato per il sito DYANA
+class OroscopoSiteRequest(BaseModel):
+    """
+    Richiesta semplificata che arriva dal sito DYANA.
+    """
+    nome: Optional[str] = None
+    citta: str
+    data_nascita: str        # "YYYY-MM-DD"
+    ora_nascita: str         # "HH:MM"
+    periodo: Literal["giornaliero", "settimanale", "mensile", "annuale"]
+    tier: Literal["free", "premium", "auto"] = "auto"
+
+
 print("[DEBUG] models defined")
 
 
@@ -221,6 +218,20 @@ def _label_map_for_lang(lang: str) -> Dict[str, str]:
 def _blank_png_no_prefix() -> str:
     # PNG 1x1 trasparente, senza prefisso data:image
     return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+
+
+# 👇 AGGIUNTO: risoluzione tier per il sito
+def _resolve_tier_for_site(req_tier: str) -> str:
+    """
+    Per ora:
+    - se il frontend specifica 'free' o 'premium', usiamo quello
+    - se manda 'auto' (o niente), trattiamo come 'free'
+    Più avanti qui leggeremo il JWT per capire il tier reale.
+    """
+    value = (req_tier or "").lower()
+    if value in ("free", "premium"):
+        return value
+    return "free"
 
 
 print("[DEBUG] utils ready")
@@ -402,132 +413,6 @@ def tema_endpoint(
 
 
 print("[DEBUG] /tema defined")
-# ---------------------------------------------------------
-# /tema_ai — TEMA + CLAUDE 3.5 (JSON + ai_debug) SENZA AUTH
-# ---------------------------------------------------------
-@app.post("/tema_ai", response_model=TemaAIResponse, tags=["TemaAI"])
-def tema_ai_endpoint(
-    payload: TemaRequest,
-    response: Response,
-    cookie_ctx: Dict[str, Any] = Depends(get_or_set_cookies),
-):
-    """
-    Variante AI di /tema:
-    - calcola il tema natale (come /tema)
-    - costruisce payload_ai compatto
-    - chiama Claude (Claude 3.5 Sonnet)
-    - ritorna:
-        - result: JSON strutturato (personalita/talenti/sfide)
-        - ai_debug: raw_text + usage + cost_usd + elapsed_sec
-    """
-    import json
-
-    start = time.time()
-
-    # 👇 NESSUNA AUTH: ruolo preso solo dal body
-    effective_role = payload.tier or "free"
-    response.set_cookie(key=COOKIE_TIER, value=effective_role, httponly=False, samesite="lax")
-
-    tema: Dict[str, Any] = {}
-
-    # 1) Calcolo tema (con fallback se astrobot_core non c'è)
-    try:
-        from astrobot_core.transiti import calcola_transiti_data_fissa
-
-        dt = datetime.strptime(f"{payload.data} {payload.ora}", "%Y-%m-%d %H:%M")
-        tema_raw = calcola_transiti_data_fissa(
-            giorno=dt.day,
-            mese=dt.month,
-            anno=dt.year,
-            ora=dt.hour,
-            minuti=dt.minute,
-            citta=payload.citta,
-            include_node=True,
-            include_lilith=True,
-        )
-
-        pianeti_decod = tema_raw.get("pianeti_decod", {}) or {}
-        asc_mc_case = tema_raw.get("asc_mc_case", {}) or {}
-        aspetti = tema_raw.get("aspetti", []) or []
-
-        tema = {
-            "data": tema_raw.get("data", dt.strftime("%Y-%m-%d %H:%M")),
-            "pianeti_decod": pianeti_decod,
-            "asc_mc_case": asc_mc_case,
-            "aspetti": aspetti,
-            "pianeti": tema_raw.get("pianeti", {}),
-            "nome": payload.nome,
-            "email": payload.email,
-            "domanda": payload.domanda,
-        }
-
-    except ModuleNotFoundError as e:
-        tema = {
-            "data": f"{payload.data} {payload.ora}",
-            "pianeti_decod": {},
-            "asc_mc_case": {},
-            "aspetti": [],
-            "pianeti": {},
-            "nome": payload.nome,
-            "email": payload.email,
-            "domanda": payload.domanda,
-            "note": f"Fallback: astrobot_core non installato ({e}), tema simulato.",
-        }
-    except Exception as e:
-        tema = {
-            "data": f"{payload.data} {payload.ora}",
-            "pianeti_decod": {},
-            "asc_mc_case": {},
-            "aspetti": [],
-            "pianeti": {},
-            "nome": payload.nome,
-            "email": payload.email,
-            "domanda": payload.domanda,
-            "note": f"Errore calcolo tema: {e}",
-        }
-
-    # 2) Payload AI compatto (FREE vs PREMIUM)
-    payload_ai = build_payload_tema_ai(tema, tier=effective_role)
-
-    # 3) Chiamata a Claude (Claude 3.5 Sonnet) + debug costi
-    try:
-        claude_debug = call_claude_tema_ai(payload_ai, tier=effective_role)
-        raw_text = claude_debug.get("raw_text") or ""
-        try:
-            ai_json = json.loads(raw_text)
-        except Exception as e:
-            ai_json = {
-                "error": "JSON non valido",
-                "parse_error": str(e),
-                "raw_preview": raw_text[:4000],
-            }
-    except Exception as e:
-        # Se esplode Claude, NON mandiamo 500 ma ritorniamo l'errore in ai_debug
-        claude_debug = {
-            "raw_text": "",
-            "usage": {"input_tokens": None, "output_tokens": None},
-            "cost_usd": None,
-            "elapsed_sec": None,
-            "model": "claude-3-5-sonnet-20241022",
-            "error": f"{type(e).__name__}: {e}",
-        }
-        ai_json = {
-            "error": "Claude call failed",
-            "detail": str(e),
-        }
-
-    elapsed = time.time() - start
-
-    return TemaAIResponse(
-        status="ok",
-        elapsed=elapsed,
-        input=payload.model_dump(),
-        tema=tema,
-        payload_ai=payload_ai,
-        result=ai_json,
-        ai_debug=claude_debug,
-        role=effective_role,
-    )
 
 
 # ---------------------------------------------------------
@@ -702,6 +587,56 @@ def transiti_premium_endpoint(
 
 
 print("[DEBUG] /transiti/premium defined")
+# ---------------------------------------------------------
+# ROUTER TEMA_AI (separato)
+# ---------------------------------------------------------
+try:
+    from routes.routes_tema_ai import router as tema_ai_router
+
+    app.include_router(tema_ai_router)
+    print("[DEBUG] routes_tema_ai included")
+except Exception as e:
+    print(f"[WARN] routes_tema_ai non caricato: {e}")
+
+# ---------------------------------------------------------
+# /oroscopo_site — STUB per DYANA (AGGIUNTO)
+# ---------------------------------------------------------
+@app.post("/oroscopo_site", tags=["Oroscopo"])
+def oroscopo_site(req: OroscopoSiteRequest) -> Dict[str, Any]:
+    """
+    Endpoint *semplice* per il sito DYANA.
+
+    ADESSO è solo uno STUB:
+    - non usa ancora la pipeline vera,
+    - non chiama ancora build_oroscopo_payload_ai,
+    - non chiama ancora Claude.
+
+    Serve solo per:
+    - verificare che la route funzioni,
+    - definire la struttura base della risposta.
+    """
+    effective_tier = _resolve_tier_for_site(req.tier)
+
+    return {
+        "status": "ok",
+        "scope": req.periodo,
+        "engine": "site_stub",
+        "tier": effective_tier,
+        "input": {
+            "nome": req.nome,
+            "citta": req.citta,
+            "data_nascita": req.data_nascita,
+            "ora_nascita": req.ora_nascita,
+            "periodo": req.periodo,
+            "tier": req.tier,
+        },
+        "result": {
+            "meta": {
+                "msg": "Stub oroscopo_site: la pipeline AI non è ancora collegata.",
+                "nota": "Prossimo step: usare run_oroscopo_multi_snapshot + build_oroscopo_struct_from_pipe + build_oroscopo_payload_ai.",
+            }
+        },
+    }
 
 
 # ---------------------------------------------------------
