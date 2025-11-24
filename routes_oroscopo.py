@@ -1,10 +1,21 @@
 # chatbot_test/routes_oroscopo.py
 
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional, Tuple, List, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field, validator
+
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+import calendar
+
+from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
+from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
+from astrobot_core.ai_oroscopo_claude import call_claude_oroscopo_ai
+
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -17,6 +28,23 @@ router = APIRouter()
 Periodo = Literal["daily", "weekly", "monthly", "yearly"]
 Tier = Literal["free", "premium"]
 Engine = Literal["ai", "new", "legacy"]  # ai = pipeline completa (Claude), new = numerico
+
+
+# Mappa periodi inglesi (API) → italiani (core AstroBot)
+PERIODO_EN_TO_IT = {
+    "daily": "giornaliero",
+    "weekly": "settimanale",
+    "monthly": "mensile",
+    "yearly": "annuale",
+}
+
+# Mappa periodi italiani → codici usati dal payload AI
+PERIODO_IT_TO_CODE = {
+    "giornaliero": "daily",
+    "settimanale": "weekly",
+    "mensile": "monthly",
+    "annuale": "yearly",
+}
 
 
 # ============================================================
@@ -167,43 +195,555 @@ def _resolve_engine(x_engine: Optional[str]) -> Engine:
     return value  # type: ignore[return-value]
 
 
+
 # ============================================================
-# TODO: collegamento al core AstroBot
+# STRUTTURA PERSONA (per riusare la logica del test)
 # ============================================================
 
-def _run_oroscopo_engine_new(
-    scope: Periodo,
-    tier: Tier,
-    data_input: OroscopoBaseInput,
-) -> Dict[str, Any]:
-    """
-    Wrapper unico per il motore numerico (multi-snapshot).
-    Qui dovresti richiamare il tuo codice in astrobot-core, ad esempio:
-        from astrobot_core.oroscopo_engine_new import run_oroscopo_multi_snapshot
+@dataclass
+class Persona:
+    nome: str
+    citta: str
+    data: str
+    ora: str
+    periodo: str   # "giornaliero" | "settimanale" | "mensile" | "annuale"
+    tier: str      # "free" | "premium"
 
-        result = run_oroscopo_multi_snapshot(
-            periodo=scope,
-            tier=tier,
-            citta=data_input.citta,
-            data=data_input.data,
-            ora=data_input.ora,
-            nome=data_input.nome,
-            email=data_input.email,
-        )
 
-    Per ora metto un placeholder così il file è auto-consistente.
+# ============================================================
+# HELPER ORB/DATE UTILIZZATI NELLA PIPE OROSCOPO
+# ============================================================
+
+def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
+    if today is None:
+        today = date.today()
+    if not s:
+        return datetime.combine(today, datetime.min.time())
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return datetime.combine(today, datetime.min.time())
+
+
+def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    # TODO: sostituisci questo blocco con l'import reale + chiamata al motore new
-    logger.info(
-        "[OROSCOPO][ENGINE_NEW] scope=%s tier=%s citta=%s data=%s",
-        scope, tier, data_input.citta, data_input.data
-    )
-    return {
-        "engine_version": "new",
-        "scope": scope,
-        "tier": tier,
-        "note": "TODO: collega qui run_oroscopo_multi_snapshot dal core AstroBot.",
+    Copia della logica del test:
+    - giornaliero free: nessun sottoperiodo
+    - giornaliero premium: mattina, pomeriggio, domani
+    - settimanale free: settimana, weekend
+    - settimanale premium: inizio settimana, metà settimana, weekend
+    - mensile free: nessun sottoperiodo
+    - mensile premium: 3 decadi
+    - annuale free: nessun sottoperiodo
+    - annuale premium: 4 stagioni
+    """
+    today = date.today()
+    periodo = (periodo or "").lower()
+    tier = (tier or "").lower()
+    out: List[Dict[str, Any]] = []
+
+    start_dt = _safe_iso_to_dt(date_range.get("start"), today=today)
+    end_dt = _safe_iso_to_dt(date_range.get("end"), today=today)
+
+    # --- GIORNALIERO ---
+    if periodo.startswith("giorn"):
+        if tier == "premium":
+            domani = start_dt + timedelta(days=1)
+            out = [
+                {"id": "mattina", "label": "Mattina", "datetime": start_dt.replace(hour=9).isoformat()},
+                {"id": "pomeriggio", "label": "Pomeriggio", "datetime": start_dt.replace(hour=15).isoformat()},
+                {"id": "domani", "label": "Domani", "datetime": domani.isoformat()},
+            ]
+        return out
+
+    # --- SETTIMANALE ---
+    if periodo.startswith("settim"):
+        weekend_start = start_dt + timedelta(days=5)
+
+        if tier == "premium":
+            out = [
+                {
+                    "id": "inizio_settimana",
+                    "label": "Inizio settimana",
+                    "range": {
+                        "start": start_dt.isoformat(),
+                        "end": (start_dt + timedelta(days=2)).isoformat(),
+                    },
+                },
+                {
+                    "id": "meta_settimana",
+                    "label": "Metà settimana",
+                    "range": {
+                        "start": (start_dt + timedelta(days=3)).isoformat(),
+                        "end": (start_dt + timedelta(days=4)).isoformat(),
+                    },
+                },
+                {
+                    "id": "weekend",
+                    "label": "Weekend",
+                    "range": {
+                        "start": weekend_start.isoformat(),
+                        "end": (weekend_start + timedelta(days=1)).isoformat(),
+                    },
+                },
+            ]
+        else:
+            out = [
+                {
+                    "id": "settimana",
+                    "label": "Settimana intera",
+                    "range": {
+                        "start": start_dt.isoformat(),
+                        "end": weekend_start.isoformat(),
+                    },
+                },
+                {
+                    "id": "weekend",
+                    "label": "Weekend",
+                    "range": {
+                        "start": weekend_start.isoformat(),
+                        "end": (weekend_start + timedelta(days=1)).isoformat(),
+                    },
+                },
+            ]
+        return out
+
+    # --- MENSILE ---
+    if periodo.startswith("mens"):
+        if tier == "premium":
+            out = [
+                {
+                    "id": "prima_decade",
+                    "label": "1–10 del mese",
+                    "range": {
+                        "start": start_dt.isoformat(),
+                        "end": (start_dt + timedelta(days=9)).isoformat(),
+                    },
+                },
+                {
+                    "id": "seconda_decade",
+                    "label": "11–20 del mese",
+                    "range": {
+                        "start": (start_dt + timedelta(days=10)).isoformat(),
+                        "end": (start_dt + timedelta(days=19)).isoformat(),
+                    },
+                },
+                {
+                    "id": "terza_decade",
+                    "label": "21–fine mese",
+                    "range": {
+                        "start": (start_dt + timedelta(days=20)).isoformat(),
+                        "end": end_dt.isoformat(),
+                    },
+                },
+            ]
+        return out
+
+    # --- ANNUALE ---
+    if periodo.startswith("ann"):
+        if tier == "premium":
+            year = start_dt.year
+            out = [
+                {"id": "inverno",   "label": "Inverno",   "range": {"start": f"{year}-01-01", "end": f"{year}-03-20"}},
+                {"id": "primavera", "label": "Primavera", "range": {"start": f"{year}-03-21", "end": f"{year}-06-20"}},
+                {"id": "estate",    "label": "Estate",    "range": {"start": f"{year}-06-21", "end": f"{year}-09-22"}},
+                {"id": "autunno",   "label": "Autunno",   "range": {"start": f"{year}-09-23", "end": f"{year}-12-31"}},
+            ]
+        return out
+
+    return out
+
+
+def _aggregate_bucket(label: str, samples: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not samples:
+        return None
+
+    today = date.today()
+    dts: List[datetime] = []
+    for s in samples:
+        dt_raw = s.get("datetime")
+        dts.append(_safe_iso_to_dt(dt_raw if isinstance(dt_raw, str) else None, today=today))
+
+    ts_avg = sum(dt.timestamp() for dt in dts) / len(dts)
+    dt_mid = datetime.fromtimestamp(ts_avg)
+
+    first_metrics = (samples[0].get("metrics") or {})
+    raw_scores0 = first_metrics.get("raw_scores") or {}
+    ambiti = list(raw_scores0.keys())
+
+    agg_raw: Dict[str, float] = {}
+    agg_int: Dict[str, float] = {}
+
+    for amb in ambiti:
+        vals_raw = []
+        vals_int = []
+        for s in samples:
+            m = s.get("metrics") or {}
+            rs = (m.get("raw_scores") or {}).get(amb)
+            it = (m.get("intensities") or {}).get(amb)
+            if rs is not None:
+                vals_raw.append(rs)
+            if it is not None:
+                vals_int.append(it)
+        if vals_raw:
+            agg_raw[amb] = sum(vals_raw) / len(vals_raw)
+        if vals_int:
+            agg_int[amb] = sum(vals_int) / len(vals_int)
+
+    n_vals = []
+    for s in samples:
+        m = s.get("metrics") or {}
+        n = m.get("n_aspetti")
+        if n is not None:
+            n_vals.append(n)
+    n_aspetti = int(round(sum(n_vals) / len(n_vals))) if n_vals else None
+
+    metrics_out: Dict[str, Any] = {
+        "raw_scores": agg_raw,
+        "intensities": agg_int,
     }
+    if n_aspetti is not None:
+        metrics_out["n_aspetti"] = n_aspetti
+
+    return {
+        "label": label,
+        "datetime": dt_mid.isoformat(timespec="seconds"),
+        "metrics": metrics_out,
+    }
+
+
+def _aggregate_annual_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not samples:
+        return {"samples": []}
+
+    today = date.today()
+    year = _safe_iso_to_dt(samples[0].get("datetime"), today=today).year
+
+    def _dt(d: date) -> datetime:
+        return datetime.combine(d, datetime.min.time()).replace(hour=12)
+
+    spring = _dt(date(year, 3, 21))
+    summer = _dt(date(year, 6, 21))
+    autumn = _dt(date(year, 9, 23))
+
+    buckets: Dict[str, List[Dict[str, Any]]] = {
+        "inverno": [],
+        "primavera": [],
+        "estate": [],
+        "autunno": [],
+    }
+
+    for s in samples:
+        t = _safe_iso_to_dt(s.get("datetime"), today=today)
+        if t < spring:
+            buckets["inverno"].append(s)
+        elif t < summer:
+            buckets["primavera"].append(s)
+        elif t < autumn:
+            buckets["estate"].append(s)
+        else:
+            buckets["autunno"].append(s)
+
+    labels = {
+        "inverno": "Inverno",
+        "primavera": "Primavera",
+        "estate": "Estate",
+        "autunno": "Autunno",
+    }
+
+    out_samples: List[Dict[str, Any]] = []
+    for key in ["inverno", "primavera", "estate", "autunno"]:
+        bucket_sample = _aggregate_bucket(labels[key], buckets[key])
+        if bucket_sample is not None:
+            out_samples.append(bucket_sample)
+
+    return {"samples": out_samples}
+
+
+def _aggregate_monthly_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not samples:
+        return {"samples": []}
+
+    today = date.today()
+    dt0 = _safe_iso_to_dt(samples[0].get("datetime"), today=today)
+    year, month = dt0.year, dt0.month
+    _, last_day = calendar.monthrange(year, month)  # non usato direttamente, ma coerente
+
+    buckets = {
+        "prima_decade": [],
+        "seconda_decade": [],
+        "terza_decade": [],
+    }
+
+    for s in samples:
+        t = _safe_iso_to_dt(s.get("datetime"), today=today)
+        day = t.day
+        if day <= 10:
+            buckets["prima_decade"].append(s)
+        elif day <= 20:
+            buckets["seconda_decade"].append(s)
+        else:
+            buckets["terza_decade"].append(s)
+
+    labels = {
+        "prima_decade": "1–10 del mese",
+        "seconda_decade": "11–20 del mese",
+        "terza_decade": "21–fine mese",
+    }
+
+    out_samples: List[Dict[str, Any]] = []
+    for key in ["prima_decade", "seconda_decade", "terza_decade"]:
+        bucket_sample = _aggregate_bucket(labels[key], buckets[key])
+        if bucket_sample is not None:
+            out_samples.append(bucket_sample)
+
+    return {"samples": out_samples}
+
+
+def _aggregate_weekly_samples(samples: List[Dict[str, Any]], tier: str) -> Dict[str, Any]:
+    if not samples:
+        return {"samples": []}
+
+    samples_sorted = sorted(samples, key=lambda s: _safe_iso_to_dt(s.get("datetime")))
+    n = len(samples_sorted)
+
+    tier_norm = (tier or "").lower()
+    if tier_norm == "premium":
+        n_buckets = 3
+        label_map = {0: "Inizio settimana", 1: "Metà settimana", 2: "Weekend"}
+    else:
+        n_buckets = 2
+        label_map = {0: "Settimana", 1: "Weekend"}
+
+    buckets: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(n_buckets)}
+
+    for idx, s in enumerate(samples_sorted):
+        b_idx = min(n_buckets - 1, int(idx * n_buckets / n))
+        buckets[b_idx].append(s)
+
+    out_samples: List[Dict[str, Any]] = []
+    for i in range(n_buckets):
+        bucket_sample = _aggregate_bucket(label_map[i], buckets[i])
+        if bucket_sample is not None:
+            out_samples.append(bucket_sample)
+
+    return {"samples": out_samples}
+
+
+def _aggregate_metriche_for_period(metriche_grafico: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+    if not metriche_grafico:
+        return metriche_grafico
+
+    samples = metriche_grafico.get("samples") or []
+    if not samples:
+        return metriche_grafico
+
+    periodo = persona.periodo.lower()
+    tier = persona.tier.lower()
+
+    if periodo.startswith("ann"):
+        return _aggregate_annual_samples(samples)
+    if periodo.startswith("mens"):
+        return _aggregate_monthly_samples(samples)
+    if periodo.startswith("settim"):
+        return _aggregate_weekly_samples(samples, tier)
+
+    return metriche_grafico
+
+
+def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+    # 1) Vecchio stile
+    po = pipe.get("periodo_output")
+    if isinstance(po, dict) and ("date_range" in po or "aspetti_rilevanti" in po):
+        return po
+
+    # 2) Strutture periodi / periodi_multi
+    periodi = pipe.get("periodi") or pipe.get("periodi_multi")
+    if isinstance(periodi, dict) and periodi:
+        key_ita = persona.periodo
+        key_code = PERIODO_IT_TO_CODE.get(persona.periodo, persona.periodo)
+
+        for k in (key_ita, key_code):
+            if k in periodi and isinstance(periodi[k], dict):
+                return periodi[k]
+
+    # 3) Ricerca ricorsiva generica
+    def _search(d: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(d, dict):
+            keys = set(d.keys())
+            if "date_range" in keys or "aspetti_rilevanti" in keys or "metriche_grafico" in keys:
+                return d
+            for v in d.values():
+                found = _search(v)
+                if found:
+                    return found
+        elif isinstance(d, list):
+            for item in d:
+                found = _search(item)
+                if found:
+                    return found
+        return None
+
+    found = _search(pipe)
+    return found or {}
+
+
+def _cleanup_period_block_for_ai(period_block: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+    periodo = persona.periodo.lower()
+    cleaned = dict(period_block)
+
+    # togliamo quincunx ovunque
+    aspetti = list(cleaned.get("aspetti_rilevanti") or [])
+    new_aspetti = []
+    for a in aspetti:
+        tipo = (a.get("aspetto") or a.get("tipo") or "").lower()
+        if "quincun" in tipo:
+            continue
+        new_aspetti.append(a)
+    cleaned["aspetti_rilevanti"] = new_aspetti
+
+    # annuale: togliamo la Luna dai pianeti_prevalenti
+    pian_prev = list(cleaned.get("pianeti_prevalenti") or [])
+    if periodo.startswith("ann"):
+        new_p = []
+        for p in pian_prev:
+            nome = (p.get("pianeta") or p.get("nome") or "")
+            if nome == "Luna":
+                continue
+            new_p.append(p)
+        cleaned["pianeti_prevalenti"] = new_p
+
+    return cleaned
+
+
+def build_debug_kb_hooks(
+    period_block: Dict[str, Any],
+    tema: Dict[str, Any],
+    profilo_natale: Dict[str, Any],
+    persona: Persona,
+) -> Dict[str, Any]:
+    pianeti_prev = period_block.get("pianeti_prevalenti") or []
+    aspetti = period_block.get("aspetti_rilevanti") or []
+
+    lines: List[str] = []
+
+    lines.append(f"# Contesto astrologico per {persona.nome}")
+    lines.append(f"Periodo: {persona.periodo} — Tier: {persona.tier}")
+    lines.append("")
+
+    if pianeti_prev:
+        lines.append("## Pianeti prevalenti nel periodo")
+        for p in pianeti_prev:
+            nome = p.get("pianeta") or p.get("nome") or "?"
+            score = p.get("score_periodo")
+            casa = p.get("casa_natale_transito")
+            prima = p.get("prima_occorrenza")
+            parts = [f"- {nome}"]
+            if casa is not None:
+                parts.append(f"in casa {casa}")
+            if score is not None:
+                parts.append(f"(peso periodo: {round(score, 3)})")
+            if prima:
+                parts.append(f"prima attivazione: {prima}")
+            lines.append(" ".join(parts))
+        lines.append("")
+
+    if aspetti:
+        lines.append("## Aspetti chiave del periodo")
+        for a in aspetti:
+            tr = a.get("pianeta_transito") or "?"
+            nat = a.get("pianeta_natale") or "?"
+            asp = a.get("aspetto") or a.get("tipo") or "?"
+            n_snap = a.get("n_snapshot")
+            score_rel = a.get("score_rilevanza")
+            riga = f"- {tr} {asp} {nat}"
+            if n_snap is not None:
+                riga += f" (presente in {n_snap} snapshot)"
+            if score_rel is not None:
+                riga += f", rilevanza: {round(score_rel, 3)}"
+            lines.append(riga)
+
+        lines.append("")
+        lines.append("### Dettagli delle occorrenze principali")
+        for a in aspetti:
+            tr = a.get("pianeta_transito") or "?"
+            nat = a.get("pianeta_natale") or "?"
+            asp = a.get("aspetto") or a.get("tipo") or "?"
+            occs = a.get("occorrenze") or []
+            for occ in occs:
+                dt = occ.get("datetime")
+                orb = occ.get("orb")
+                score_def = occ.get("score_definitivo")
+                lines.append(
+                    f"- {dt}: {tr} {asp} {nat} "
+                    f"(orb≈{round(orb, 3) if orb is not None else '?'}; "
+                    f"score={round(score_def, 3) if score_def is not None else '?'})"
+                )
+        lines.append("")
+
+    if profilo_natale:
+        lines.append("## Profilo natale sintetico (pesi pianeti)")
+        for nome, peso in sorted(profilo_natale.items(), key=lambda x: -x[1]):
+            lines.append(f"- {nome}: peso {peso}")
+        lines.append("")
+
+    combined_md = "\n".join(lines) if lines else ""
+
+    return {
+        "pianeti_prevalenti": pianeti_prev,
+        "aspetti_rilevanti": aspetti,
+        "combined_markdown": combined_md,
+    }
+
+
+def build_oroscopo_struct_from_pipe(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+    tema = pipe.get("tema_natale") or {}
+    profilo_natale = pipe.get("profilo_natale") or {}
+
+    periodo_output = _pick_period_block(pipe, persona) or {}
+    date_range = periodo_output.get("date_range") or {}
+    sottoperiodi = generate_subperiods(persona.periodo, persona.tier, date_range)
+
+    metriche_orig = periodo_output.get("metriche_grafico", {}) or {}
+    metriche_agg = _aggregate_metriche_for_period(metriche_orig, persona)
+
+    period_block_raw = {
+        "label": periodo_output.get("label"),
+        "date_range": date_range,
+        "sottoperiodi": sottoperiodi,
+        "aspetti_rilevanti": periodo_output.get("aspetti_rilevanti", []),
+        "metriche_grafico": metriche_agg,
+        "pianeti_prevalenti": periodo_output.get("pianeti_prevalenti", []),
+    }
+
+    period_block = _cleanup_period_block_for_ai(period_block_raw, persona)
+
+    kb_hooks = build_debug_kb_hooks(
+        period_block=period_block,
+        tema=tema,
+        profilo_natale=profilo_natale,
+        persona=persona,
+    )
+
+    oroscopo_struct = {
+        "meta": {
+            "nome": persona.nome,
+            "citta": persona.citta,
+            "data_nascita": persona.data,
+            "ora_nascita": persona.ora,
+            "tier": persona.tier,
+            "scope": "oroscopo_multi_snapshot",
+            "lang": "it",
+        },
+        "tema": tema,
+        "profilo_natale": profilo_natale,
+        "kb_hooks": kb_hooks,
+        "periodi": {
+            persona.periodo: period_block
+        },
+    }
+
+    return oroscopo_struct
 
 
 def _build_payload_ai(
@@ -213,56 +753,83 @@ def _build_payload_ai(
     data_input: OroscopoBaseInput,
 ) -> Dict[str, Any]:
     """
-    Costruisce il payload_ai da passare a Claude.
-
-    Qui dovresti usare il tuo:
-        from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
-
-    che a sua volta userà:
-      - tema natale
-      - transiti filtrati / aggregati
-      - snapshot del periodo
-      - ecc.
+    Costruisce il payload_ai da passare a Claude usando:
+    - pipe = output di run_oroscopo_multi_snapshot
+    - oroscopo_struct = stessa logica del test end-to-end
+    - build_oroscopo_payload_ai di astrobot_core
     """
-    # TODO: sostituisci questo blocco con l'import reale + chiamata build_oroscopo_payload_ai
     logger.info(
         "[OROSCOPO][PAYLOAD_AI] scope=%s tier=%s nome=%s",
         scope, tier, data_input.nome
     )
-    return {
-        "meta": {
-            "scope": "oroscopo_ai",
-            "periodo": scope,
-            "tier": tier,
-            "nome": data_input.nome,
-            "email": data_input.email,
-            "domanda": data_input.domanda,
-        },
-        "debug": {
-            "note": "TODO: collega build_oroscopo_payload_ai dal core AstroBot.",
-            "engine_result_sample": engine_result.get("scope"),
-        },
-    }
+
+    pipe = engine_result.get("pipe") or {}
+    if not pipe:
+        raise RuntimeError("engine_result.pipe mancante: assicurati che _run_oroscopo_engine_new sia stato chiamato correttamente.")
+
+    periodo_ita = PERIODO_EN_TO_IT[scope]
+    persona = Persona(
+        nome=data_input.nome or "Anonimo",
+        citta=data_input.citta,
+        data=data_input.data,
+        ora=data_input.ora or "00:00",
+        periodo=periodo_ita,
+        tier=tier,
+    )
+
+    # 1) oroscopo_struct dalla pipe (stessa logica del test)
+    oroscopo_struct = build_oroscopo_struct_from_pipe(pipe, persona)
+
+    # 2) period_code in stile "daily"/"weekly"/...
+    period_code = PERIODO_IT_TO_CODE.get(periodo_ita, scope)
+
+    # 3) payload AI usando il modulo ufficiale (prompt incluso lì)
+    payload_ai = build_oroscopo_payload_ai(
+        oroscopo_struct=oroscopo_struct,
+        lang="it",
+        period_code=period_code,
+    )
+
+    return payload_ai
 
 
 def _call_oroscopo_ai_claude(payload_ai: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Chiama Claude con il super-prompt oroscopo.
-
-    Qui dovresti usare il client che hai già preparato per il TEMA, adattato all'oroscopo, per esempio:
-        from .ai_oroscopo_client import call_claude_oroscopo
-
-        return call_claude_oroscopo(payload_ai)
-
-    Per ora restituisco un placeholder.
+    Delego tutto al client in astrobot-core.
     """
-    # TODO: sostituisci con la vera chiamata ad Anthropic (Claude)
-    logger.info("[OROSCOPO][CLAUDE] Chiamata placeholder oroscopo_ai")
+    return call_claude_oroscopo_ai(payload_ai)
+
+def _run_oroscopo_engine_new(
+    scope: Periodo,
+    tier: Tier,
+    data_input: OroscopoBaseInput,
+) -> Dict[str, Any]:
+    """
+    Wrapper per il motore numerico multi-snapshot di AstroBot.
+    Usa run_oroscopo_multi_snapshot da astrobot_core.
+    """
+    periodo_ita = PERIODO_EN_TO_IT[scope]  # es. "daily" -> "giornaliero"
+
+    logger.info(
+        "[OROSCOPO][ENGINE_NEW] scope=%s (ita=%s) tier=%s citta=%s data=%s",
+        scope, periodo_ita, tier, data_input.citta, data_input.data
+    )
+
+    pipe = run_oroscopo_multi_snapshot(
+        periodo=periodo_ita,
+        tier=tier,
+        citta=data_input.citta,
+        data_nascita=data_input.data,
+        ora_nascita=data_input.ora,
+        raw_date=date.today(),
+    )
+
     return {
-        "model": "claude-3-5-haiku-20241022",
-        "note": "TODO: collega il client reale Anthropic per l'oroscopo.",
-        "sintesi": "Questo è un placeholder: collega il vero output di Claude qui.",
-        "capitoli": [],
+        "engine_version": "new",
+        "scope": scope,
+        "tier": tier,
+        "periodo_ita": periodo_ita,
+        "pipe": pipe,
     }
 
 # ============================================================
