@@ -361,7 +361,7 @@ async def oroscopo_macro(
             error=str(e),
         )
         
- @router.post(
+@router.post(
     "/oroscopo_ai/{periodo}",
     response_model=OroscopoResponse,
     tags=["oroscopo"],
