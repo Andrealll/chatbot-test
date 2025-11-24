@@ -5,44 +5,49 @@ from typing import Dict, Any
 ESSENTIAL_PLANETS = ["Sole", "Luna", "Mercurio", "Venere", "Marte", "Giove", "Saturno"]
 
 
-def build_payload_tema_ai(tema: Dict[str, Any], tier: str = "free") -> Dict[str, Any]:
+def build_payload_tema_ai(
+    tema: Dict[str, Any],
+    nome: str = None,
+    email: str = None,
+    domanda: str = None,
+    tier: str = "free",
+) -> Dict[str, Any]:
     """
-    Costruisce un payload_ai COMPATTO per il tema natale.
-    - Riduce i campi inutili.
-    - Riduce il numero di pianeti per il tier FREE.
+    Costruisce il payload_ai da passare a Claude per il TEMA NATALE.
+    Compatibile al 100% con la route /tema_ai e con ai_claude.py.
     """
 
-    pianeti_decod = tema.get("pianeti_decod", {})
-    asc_mc_case = tema.get("asc_mc_case", {})
+    if not tema:
+        raise ValueError("Tema natale non valido (vuoto o None).")
 
-    if tier == "free":
-        # FREE → solo pianeti principali
-        pianeti_filtrati = {
-            nome: info
-            for nome, info in pianeti_decod.items()
-            if nome in ESSENTIAL_PLANETS
-        }
-    else:
-        # PREMIUM → tutti i pianeti disponibili
-        pianeti_filtrati = pianeti_decod
+    # Pianeti decodificati (preferiti) o pianeti base
+    pianeti = tema.get("pianeti_decod") or tema.get("pianeti") or {}
 
-    pianeti_compatti = {}
-    for nome, info in pianeti_filtrati.items():
-        pianeti_compatti[nome] = {
-            "segno": info.get("segno"),
-            "gradi_eclittici": round(info.get("gradi_eclittici", 0.0), 2),
-            "retrogrado": info.get("retrogrado", False),
-        }
+    # Case astrologiche
+    case = tema.get("case") or tema.get("asc_mc_case") or {}
 
     payload = {
         "meta": {
             "scope": "tema_ai",
             "tier": tier,
             "version": "1.0",
+            "nome": nome,
+            "email": email,
+            "domanda": domanda,
         },
-        "pianeti": pianeti_compatti,
-        # Case: puoi mantenerle così come sono, di solito sono poche → costo minimo
-        "case": asc_mc_case,
+        "pianeti": {},
+        "case": case,
     }
+
+    # Normalizzazione pianeti
+    for pianeta, info in pianeti.items():
+        if not isinstance(info, dict):
+            continue
+
+        payload["pianeti"][pianeta] = {
+            "segno": info.get("segno"),
+            "gradi_eclittici": info.get("gradi_eclittici") or info.get("g_long") or info.get("long"),
+            "retrogrado": info.get("retrogrado", False),
+        }
 
     return payload
