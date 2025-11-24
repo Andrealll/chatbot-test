@@ -650,7 +650,17 @@ try:
 except Exception as e:
     print(f"[WARN] routes_oroscopo non caricato: {e}")
 
-
+# ---------------------------------------------------------
+# ROUTER SINASTRIA AI (opzionale)
+# ---------------------------------------------------------
+try:
+    from routes_sinastria_ai import router as sinastria_ai_router
+    app.include_router(sinastria_ai_router)
+    print("[DEBUG] routes_sinastria_ai included")
+except Exception as e:
+    print(f"[WARN] routes_sinastria_ai non caricato: {e}")
+    
+    
 # ---------------------------------------------------------
 # ROUTER DEBUG (save-image, etc.)
 # ---------------------------------------------------------
@@ -675,3 +685,6 @@ def root():
 
 
 print("[DEBUG] main import end")
+
+
+

@@ -1,0 +1,15 @@
+{
+  "A": {
+    "nome": "Junior",
+    "citta": "Napoli",
+    "data": "1986-07-19",
+    "ora": "08:50"
+  },
+  "B": {
+    "nome": "Partner",
+    "citta": "Roma",
+    "data": "1993-02-26",
+    "ora": "04:00"
+  },
+  "tier": "premium"
+}
