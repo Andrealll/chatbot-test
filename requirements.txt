@@ -12,3 +12,4 @@ openpyxl
 aioredis
 Pillow
 requests==2.32.3
+anthropic>=0.37.0
