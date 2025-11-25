@@ -1,5 +1,6 @@
 # routes_debug.py
 from fastapi import APIRouter, HTTPException, Response
+from credits_logic import SUPABASE_URL, USE_SUPABASE
 from pydantic import BaseModel
 import base64
 
@@ -37,3 +38,9 @@ def save_image(body: SaveImageBody):
         "Content-Disposition": f'attachment; filename="{filename}"'
     }
     return Response(content=raw, media_type=mime, headers=headers)
+@router.get("/debug/credits_env")
+def debug_credits_env():
+    return {
+        "SUPABASE_URL": SUPABASE_URL,
+        "USE_SUPABASE": USE_SUPABASE,
+    }

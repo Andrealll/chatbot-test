@@ -6,6 +6,17 @@ from typing import Optional, Dict, Any, List, Literal  # ← AGGIUNTO Literal
 import time, uuid
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
+
+# === DEBUG CREDITS / SUPABASE ===
+try:
+    from credits_logic import SUPABASE_URL, USE_SUPABASE
+except Exception:
+    # Se credits_logic non è importabile per qualunque motivo,
+    # evitiamo che l'app vada in crash e mostriamo valori di fallback.
+    SUPABASE_URL = None
+    USE_SUPABASE = False
 
 print("[DEBUG] main import start")
 
@@ -688,3 +699,9 @@ print("[DEBUG] main import end")
 
 
 
+@app.get("/debug/credits_env")
+def debug_credits_env():
+    return {
+        "SUPABASE_URL": SUPABASE_URL,
+        "USE_SUPABASE": USE_SUPABASE,
+    }

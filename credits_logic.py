@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Literal, Optional
 
 import os
 import requests
 from fastapi import HTTPException, status
+from datetime import datetime, timezone, date
 
 from auth import UserContext
 from settings_credits import FREE_TRIES_PER_PERIOD, FREE_TRIES_PERIOD_DAYS
@@ -211,7 +211,6 @@ def _save_entitlement_state(state: UserCreditsState) -> None:
 # -------------------------
 #  HELPERS GUESTS
 # -------------------------
-
 def _extract_guest_uuid(sub: str) -> Optional[str]:
     """
     sub è del tipo "anon-<uuid>".
@@ -224,6 +223,21 @@ def _extract_guest_uuid(sub: str) -> Optional[str]:
 
 
 def _load_guest_state(sub: str) -> UserCreditsState:
+    """
+    Mappa la tabella `guests` (schema reale):
+
+        guest_id uuid primary key,
+        day date,
+        free_uses int not null default 0,
+        last_seen timestamptz,
+        ip_hash text,
+        ua text
+
+    sui campi logici:
+
+        free_tries_used         <-> free_uses
+        free_tries_period_start <-> day (come datetime UTC a mezzanotte)
+    """
     guest_uuid = _extract_guest_uuid(sub)
     if not guest_uuid:
         # Se qualcosa non torna, trattiamo l'utente come "vuoto"
@@ -251,11 +265,12 @@ def _load_guest_state(sub: str) -> UserCreditsState:
     headers = _supabase_headers()
     params = {
         "guest_id": f"eq.{guest_uuid}",
-        "select": "free_tries_used,free_tries_period_start",
+        "select": "guest_id,day,free_uses",
     }
 
     resp = requests.get(url, headers=headers, params=params, timeout=5)
     if resp.status_code != 200:
+        # In caso di errore DB, fallback su stato "vuoto"
         return UserCreditsState(
             sub=sub,
             role="free",
@@ -267,11 +282,11 @@ def _load_guest_state(sub: str) -> UserCreditsState:
 
     rows = resp.json()
     if not rows:
-        # Creiamo un guest "nuovo"
+        # Nessuna riga: creiamo un guest "nuovo"
         data = {
             "guest_id": guest_uuid,
-            "free_tries_used": 0,
-            "free_tries_period_start": None,
+            "free_uses": 0,
+            "day": None,
         }
         resp_ins = requests.post(
             url,
@@ -279,7 +294,9 @@ def _load_guest_state(sub: str) -> UserCreditsState:
             json=data,
             timeout=5,
         )
+        print("[CREDITS] GET /guests", resp.status_code, resp.text)
         if resp_ins.status_code not in (200, 201):
+            # Fallback se anche l'insert fallisce
             return UserCreditsState(
                 sub=sub,
                 role="free",
@@ -292,14 +309,14 @@ def _load_guest_state(sub: str) -> UserCreditsState:
     else:
         row = rows[0]
 
-    free_tries_used = row.get("free_tries_used", 0) or 0
-    period_start_str = row.get("free_tries_period_start")
+    free_uses = row.get("free_uses", 0) or 0
+    day_str = row.get("day")
 
-    if period_start_str:
+    if day_str:
         try:
-            free_tries_period_start = datetime.fromisoformat(period_start_str)
-            if free_tries_period_start.tzinfo is None:
-                free_tries_period_start = free_tries_period_start.replace(tzinfo=timezone.utc)
+            # day è una DATE ("YYYY-MM-DD"), la mappiamo a datetime a mezzanotte UTC
+            d = date.fromisoformat(day_str)
+            free_tries_period_start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
         except Exception:
             free_tries_period_start = None
     else:
@@ -310,12 +327,18 @@ def _load_guest_state(sub: str) -> UserCreditsState:
         role="free",
         is_guest=True,
         paid_credits=0,  # i guest non hanno crediti pagati
-        free_tries_used=free_tries_used,
+        free_tries_used=free_uses,
         free_tries_period_start=free_tries_period_start,
     )
 
 
 def _save_guest_state(state: UserCreditsState) -> None:
+    """
+    Salva lo stato del guest mappando:
+
+        free_tries_used         -> free_uses
+        free_tries_period_start -> day (DATE)
+    """
     guest_uuid = _extract_guest_uuid(state.sub)
     if not guest_uuid or not USE_SUPABASE:
         return
@@ -323,15 +346,15 @@ def _save_guest_state(state: UserCreditsState) -> None:
     url = f"{SUPABASE_URL}/rest/v1/guests"
     headers = _supabase_headers()
 
-    period_start = (
-        state.free_tries_period_start.isoformat()
-        if state.free_tries_period_start is not None
-        else None
-    )
+    if state.free_tries_period_start is not None:
+        d = state.free_tries_period_start.date()
+        day_value = d.isoformat()
+    else:
+        day_value = None
 
     data = {
-        "free_tries_used": state.free_tries_used,
-        "free_tries_period_start": period_start,
+        "free_uses": state.free_tries_used,
+        "day": day_value,
     }
 
     params = {
@@ -345,7 +368,10 @@ def _save_guest_state(state: UserCreditsState) -> None:
         json=data,
         timeout=5,
     )
-    # Anche qui, se fallisce, per ora non solleviamo: da loggare in futuro
+    
+    print("[CREDITS] PATCH /guests", resp.status_code, resp.text)
+# Anche qui, se fallisce, per ora non solleviamo: da loggare in futuro
+    # Se fallisce, per ora niente eccezione: in futuro si può loggare resp.status_code / resp.text
 
 
 # =========================================================
