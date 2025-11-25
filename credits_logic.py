@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
+import os
+import requests
 from fastapi import HTTPException, status
 
 from auth import UserContext
@@ -18,10 +20,6 @@ ModeType = Literal["paid", "free_try", "denied"]
 class UserCreditsState:
     """
     Stato crediti + free tries per un utente.
-
-    NOTA: qui non facciamo ancora query reali su Supabase.
-    Le funzioni di load/save sono dei placeholder da collegare
-    alle tabelle `entitlements` (utenti) e `guests` (anonimi).
     """
     sub: str
     role: str
@@ -40,44 +38,314 @@ class PremiumDecision:
 
 
 # =========================================================
-#  FUNZIONI DI ACCESSO AI DATI (PLACEHOLDER)
+#  CONFIG SUPABASE
+# =========================================================
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+
+
+def _supabase_headers() -> dict:
+    return {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+# =========================================================
+#  FUNZIONI DI ACCESSO AI DATI
 # =========================================================
 
 def load_user_credits_state(user: UserContext) -> UserCreditsState:
     """
     Carica lo stato crediti + free tries dal DB (Supabase).
 
-    QUI al momento mettiamo solo un placeholder che inizializza tutto a zero.
-
-    TODO (da implementare):
-      - Se user.sub inizia con "anon-": leggere/aggiornare la tabella `guests`
-      - Altrimenti: leggere/aggiornare la tabella `entitlements`
+    - Se USE_SUPABASE = False: ritorna uno stato di default (stub).
+    - Se sub inizia con "anon-": usa tabella `guests`.
+    - Altrimenti: usa tabella `entitlements`.
     """
     is_guest = user.sub.startswith("anon-")
 
-    # Placeholder: nessun credito pagato, nessun free try usato
-    # (serve solo per non bloccare gli endpoint mentre sviluppiamo la logica)
-    return UserCreditsState(
-        sub=user.sub,
-        role=user.role,
-        is_guest=is_guest,
-        paid_credits=0,
-        free_tries_used=0,
-        free_tries_period_start=None,
-    )
+    # Fallback stub: nessun DB configurato → utente con 0 crediti e 0 tries
+    if not USE_SUPABASE:
+        return UserCreditsState(
+            sub=user.sub,
+            role=user.role,
+            is_guest=is_guest,
+            paid_credits=0,
+            free_tries_used=0,
+            free_tries_period_start=None,
+        )
+
+    if is_guest:
+        return _load_guest_state(user.sub)
+    else:
+        return _load_entitlement_state(user.sub, user.role)
 
 
 def save_user_credits_state(state: UserCreditsState) -> None:
     """
     Salva lo stato crediti + free tries nel DB (Supabase).
 
-    TODO (da implementare):
-      - Se state.is_guest: update su `guests`
-      - Altrimenti: update su `entitlements`
+    Se USE_SUPABASE = False: non fa nulla (stub).
     """
-    # Placeholder: per ora non fa nulla.
-    # Quando integrerai Supabase, qui andranno le query di update.
-    return
+    if not USE_SUPABASE:
+        return
+
+    if state.is_guest:
+        _save_guest_state(state)
+    else:
+        _save_entitlement_state(state)
+
+
+# -------------------------
+#  HELPERS ENTITLEMENTS
+# -------------------------
+
+def _load_entitlement_state(user_id: str, role: str) -> UserCreditsState:
+    url = f"{SUPABASE_URL}/rest/v1/entitlements"
+    headers = _supabase_headers()
+    params = {
+        "user_id": f"eq.{user_id}",
+        "select": "credits,free_tries_used,free_tries_period_start",
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=5)
+    if resp.status_code != 200:
+        # In caso di errore DB, fallback su stato "vuoto" per non spaccare tutto
+        return UserCreditsState(
+            sub=user_id,
+            role=role,
+            is_guest=False,
+            paid_credits=0,
+            free_tries_used=0,
+            free_tries_period_start=None,
+        )
+
+    rows = resp.json()
+    if not rows:
+        # Nessuna riga: creiamo un entitlement base (0 crediti, 0 tries)
+        data = {
+            "user_id": user_id,
+            "credits": 0,
+            "free_tries_used": 0,
+            "free_tries_period_start": None,
+        }
+        resp_ins = requests.post(
+            url,
+            headers={**headers, "Prefer": "return=representation"},
+            json=data,
+            timeout=5,
+        )
+        if resp_ins.status_code not in (200, 201):
+            # Anche qui, fallback "vuoto"
+            return UserCreditsState(
+                sub=user_id,
+                role=role,
+                is_guest=False,
+                paid_credits=0,
+                free_tries_used=0,
+                free_tries_period_start=None,
+            )
+        row = resp_ins.json()[0]
+    else:
+        row = rows[0]
+
+    credits = row.get("credits", 0) or 0
+    free_tries_used = row.get("free_tries_used", 0) or 0
+    period_start_str = row.get("free_tries_period_start")
+
+    if period_start_str:
+        try:
+            free_tries_period_start = datetime.fromisoformat(period_start_str)
+            if free_tries_period_start.tzinfo is None:
+                free_tries_period_start = free_tries_period_start.replace(tzinfo=timezone.utc)
+        except Exception:
+            free_tries_period_start = None
+    else:
+        free_tries_period_start = None
+
+    return UserCreditsState(
+        sub=user_id,
+        role=role,
+        is_guest=False,
+        paid_credits=credits,
+        free_tries_used=free_tries_used,
+        free_tries_period_start=free_tries_period_start,
+    )
+
+
+def _save_entitlement_state(state: UserCreditsState) -> None:
+    url = f"{SUPABASE_URL}/rest/v1/entitlements"
+    headers = _supabase_headers()
+
+    period_start = (
+        state.free_tries_period_start.isoformat()
+        if state.free_tries_period_start is not None
+        else None
+    )
+
+    data = {
+        "credits": state.paid_credits,
+        "free_tries_used": state.free_tries_used,
+        "free_tries_period_start": period_start,
+    }
+
+    params = {
+        "user_id": f"eq.{state.sub}",
+    }
+
+    resp = requests.patch(
+        url,
+        headers=headers,
+        params=params,
+        json=data,
+        timeout=5,
+    )
+    # Se fallisce, per ora non tiriamo giù tutto: possiamo loggare in futuro
+
+
+# -------------------------
+#  HELPERS GUESTS
+# -------------------------
+
+def _extract_guest_uuid(sub: str) -> Optional[str]:
+    """
+    sub è del tipo "anon-<uuid>".
+    Estraggo la parte uuid dopo "anon-".
+    """
+    prefix = "anon-"
+    if not sub.startswith(prefix):
+        return None
+    return sub[len(prefix):]
+
+
+def _load_guest_state(sub: str) -> UserCreditsState:
+    guest_uuid = _extract_guest_uuid(sub)
+    if not guest_uuid:
+        # Se qualcosa non torna, trattiamo l'utente come "vuoto"
+        return UserCreditsState(
+            sub=sub,
+            role="free",
+            is_guest=True,
+            paid_credits=0,
+            free_tries_used=0,
+            free_tries_period_start=None,
+        )
+
+    if not USE_SUPABASE:
+        # Caso teorico, ma per coerenza:
+        return UserCreditsState(
+            sub=sub,
+            role="free",
+            is_guest=True,
+            paid_credits=0,
+            free_tries_used=0,
+            free_tries_period_start=None,
+        )
+
+    url = f"{SUPABASE_URL}/rest/v1/guests"
+    headers = _supabase_headers()
+    params = {
+        "guest_id": f"eq.{guest_uuid}",
+        "select": "free_tries_used,free_tries_period_start",
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=5)
+    if resp.status_code != 200:
+        return UserCreditsState(
+            sub=sub,
+            role="free",
+            is_guest=True,
+            paid_credits=0,
+            free_tries_used=0,
+            free_tries_period_start=None,
+        )
+
+    rows = resp.json()
+    if not rows:
+        # Creiamo un guest "nuovo"
+        data = {
+            "guest_id": guest_uuid,
+            "free_tries_used": 0,
+            "free_tries_period_start": None,
+        }
+        resp_ins = requests.post(
+            url,
+            headers={**headers, "Prefer": "return=representation"},
+            json=data,
+            timeout=5,
+        )
+        if resp_ins.status_code not in (200, 201):
+            return UserCreditsState(
+                sub=sub,
+                role="free",
+                is_guest=True,
+                paid_credits=0,
+                free_tries_used=0,
+                free_tries_period_start=None,
+            )
+        row = resp_ins.json()[0]
+    else:
+        row = rows[0]
+
+    free_tries_used = row.get("free_tries_used", 0) or 0
+    period_start_str = row.get("free_tries_period_start")
+
+    if period_start_str:
+        try:
+            free_tries_period_start = datetime.fromisoformat(period_start_str)
+            if free_tries_period_start.tzinfo is None:
+                free_tries_period_start = free_tries_period_start.replace(tzinfo=timezone.utc)
+        except Exception:
+            free_tries_period_start = None
+    else:
+        free_tries_period_start = None
+
+    return UserCreditsState(
+        sub=sub,
+        role="free",
+        is_guest=True,
+        paid_credits=0,  # i guest non hanno crediti pagati
+        free_tries_used=free_tries_used,
+        free_tries_period_start=free_tries_period_start,
+    )
+
+
+def _save_guest_state(state: UserCreditsState) -> None:
+    guest_uuid = _extract_guest_uuid(state.sub)
+    if not guest_uuid or not USE_SUPABASE:
+        return
+
+    url = f"{SUPABASE_URL}/rest/v1/guests"
+    headers = _supabase_headers()
+
+    period_start = (
+        state.free_tries_period_start.isoformat()
+        if state.free_tries_period_start is not None
+        else None
+    )
+
+    data = {
+        "free_tries_used": state.free_tries_used,
+        "free_tries_period_start": period_start,
+    }
+
+    params = {
+        "guest_id": f"eq.{guest_uuid}",
+    }
+
+    resp = requests.patch(
+        url,
+        headers=headers,
+        params=params,
+        json=data,
+        timeout=5,
+    )
+    # Anche qui, se fallisce, per ora non solleviamo: da loggare in futuro
 
 
 # =========================================================
@@ -111,7 +379,6 @@ def decide_premium_mode(
 
     # 3) Nessun credito pagato: gestiamo i free tries
 
-    # Se non abbiamo ancora un periodo, lo inizializziamo ora
     period_start = state.free_tries_period_start
     if period_start is None:
         state.free_tries_period_start = now
@@ -123,11 +390,9 @@ def decide_premium_mode(
             state.free_tries_period_start = now
             state.free_tries_used = 0
 
-    # Ora controlliamo il numero di try usati nel periodo
     if state.free_tries_used < FREE_TRIES_PER_PERIOD:
         return PremiumDecision(allowed=True, mode="free_try")
 
-    # Nessun credito e nessun free try residuo
     return PremiumDecision(
         allowed=False,
         mode="denied",
@@ -154,7 +419,6 @@ def apply_premium_consumption(
 
     if decision.mode == "paid":
         if state.paid_credits < feature_cost:
-            # Non dovrebbe succedere se controlli prima, ma per sicurezza:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Crediti insufficienti per questa operazione.",
@@ -167,7 +431,6 @@ def apply_premium_consumption(
         state.free_tries_used += 1
         return
 
-    # mode "denied" dovrebbe essere già gestito sopra
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Stato crediti non consistente.",
