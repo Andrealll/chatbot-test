@@ -648,7 +648,16 @@ def oroscopo_site(req: OroscopoSiteRequest) -> Dict[str, Any]:
             }
         },
     }
+# ---------------------------------------------------------
+# ROUTER DYANA (opzionale)
+# ---------------------------------------------------------
+try:
+    from routes_diyana  import router as diyana_router
 
+    app.include_router(diyana_router)
+    print("[DEBUG] routes_diyana_ included")
+except Exception as e:
+    print(f"[WARN] routes_diyana non caricato: {e}")
 
 # ---------------------------------------------------------
 # ROUTER OROSCOPI (opzionale)

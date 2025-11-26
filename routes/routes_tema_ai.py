@@ -9,23 +9,24 @@ from astrobot_core.calcoli import costruisci_tema_natale
 from utils.payload_tema_ai import build_payload_tema_ai
 from ai_claude import call_claude_tema_ai
 
-# --- NUOVI IMPORT PER AUTH + CREDITI ---
+# --- IMPORT PER AUTH + CREDITI ---
 from auth import get_current_user, UserContext
-from credits_logic import (
+from astrobot_auth.credits_logic import (
     load_user_credits_state,
     save_user_credits_state,
     decide_premium_mode,
     apply_premium_consumption,
+    log_usage_event,
+    PremiumDecision,
 )
 
 router = APIRouter()
 
 # ==========================
-#  Costi in crediti
+#  Costi in crediti (parametrici)
 # ==========================
-# Tema natale AI: costo fisso in crediti (parametrico in futuro se vuoi)
 TEMA_AI_FEATURE_KEY = "tema_ai"
-TEMA_AI_FEATURE_COST = 2  # 2 crediti per tema_ai
+TEMA_AI_PREMIUM_COST = 2  # <-- se domani vuoi 3/5 ecc, cambi solo qui
 
 
 # ==========================
@@ -38,7 +39,7 @@ class TemaAIRequest(BaseModel):
     nome: Optional[str] = None
     email: Optional[str] = None
     domanda: Optional[str] = None
-    tier: str = "free"   # free | premium (usato ancora per il prompt di Claude)
+    tier: str = "free"   # "free" | "premium"
 
 
 # ==========================
@@ -47,37 +48,58 @@ class TemaAIRequest(BaseModel):
 @router.post("/tema_ai")
 def tema_ai_endpoint(
     body: TemaAIRequest,
-    user: UserContext = Depends(get_current_user),  # <-- NUOVO: utente dal JWT
+    user: UserContext = Depends(get_current_user),
 ):
     """
-    1) Verifica crediti / free tries (gating)
-    2) Calcola il tema natale
-    3) Costruisce payload_ai (pianeti, case, meta…)
-    4) Chiama Claude (free/premium)
-    5) Restituisce JSON finale
+    0) Gating crediti SOLO se tier == "premium"
+    1) Calcolo tema natale
+    2) Build payload_ai
+    3) Chiamata Claude
+    4) Logging usage
+    5) Risposta finale con blocco billing
     """
+
     # ====================================================
-    # 0) GATING CREDITI / FREE TRIES
+    # 0) GATING CREDITI (solo per PREMIUM)
     # ====================================================
-    # Carichiamo lo stato crediti + free tries per questo utente
-    state = load_user_credits_state(user)
+    state = None
+    decision: Optional[PremiumDecision] = None
+    billing_mode = "free"  # default per tier free
 
-    # Decidiamo se può eseguire una lettura premium di tipo "tema_ai"
-    decision = decide_premium_mode(state)
+    paid_credits_before = None
+    paid_credits_after = None
+    free_credits_used_before = None
+    free_credits_used_after = None
 
-    # Applichiamo il consumo (crediti pagati o free_try) oppure solleviamo errore
-    # NB: TEMA_AI_FEATURE_COST è il costo in crediti del tema natale AI
-    apply_premium_consumption(state, decision, feature_cost=TEMA_AI_FEATURE_COST)
+    if body.tier == "premium":
+        state = load_user_credits_state(user)
 
-    # Salviamo lo stato aggiornato (per ora è uno stub, verrà collegato a Supabase)
-    save_user_credits_state(state)
+        paid_credits_before = state.paid_credits
+        free_credits_used_before = state.free_tries_used
 
-    # (Opzionale) Potresti anche decidere di forzare tier="premium" se vuoi che
-    # tema_ai sia sempre trattato come prodotto premium a pagamento, ma per ora
-    # lascio body.tier così com'è, in modo da non rompere la logica esistente.
-    #
-    # Esempio se un domani vuoi forzare:
-    # body.tier = "premium"
+        decision = decide_premium_mode(state)
+
+        # Se non allowed o crediti insufficienti, qui scatta HTTPException 402
+        apply_premium_consumption(
+            state,
+            decision,
+            feature_cost=TEMA_AI_PREMIUM_COST,
+        )
+
+        save_user_credits_state(state)
+
+        paid_credits_after = state.paid_credits
+        free_credits_used_after = state.free_tries_used
+
+        if decision.mode == "paid":
+            billing_mode = "paid"
+        elif decision.mode == "free_credit":
+            billing_mode = "free_credit"
+        else:
+            billing_mode = "denied"
+    else:
+        # tier free: NON tocchiamo i crediti, ma teniamo traccia del fatto che è free
+        billing_mode = "free"
 
     # ====================================================
     # 1) Calcolo tema natale
@@ -87,12 +109,12 @@ def tema_ai_endpoint(
             body.citta,
             body.data,
             body.ora,
-            sistema_case="equal"
+            sistema_case="equal",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Errore nel calcolo del tema natale: {e}"
+            detail=f"Errore nel calcolo del tema natale: {e}",
         )
 
     # ====================================================
@@ -104,12 +126,12 @@ def tema_ai_endpoint(
             nome=body.nome,
             email=body.email,
             domanda=body.domanda,
-            tier=body.tier,
+            tier=body.tier,   # "free" o "premium" influenza il prompt
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Errore nella costruzione del payload AI: {e}"
+            detail=f"Errore nella costruzione del payload AI: {e}",
         )
 
     # ====================================================
@@ -117,13 +139,77 @@ def tema_ai_endpoint(
     # ====================================================
     ai_debug = call_claude_tema_ai(payload_ai, tier=body.tier)
 
-    # Claude può restituire raw_text in diversi punti
     raw = (
         ai_debug.get("raw_text")
         or ai_debug.get("ai_debug", {}).get("raw_text")
         or ""
     )
 
+    # ====================================================
+    # 3b) LOGGING USAGE (usage_logs)
+    # ====================================================
+    usage = {}
+    try:
+        usage = (ai_debug.get("ai_debug") or {}).get("usage") or {}
+    except Exception:
+        usage = {}
+
+    tokens_in = usage.get("input_tokens", 0)
+    tokens_out = usage.get("output_tokens", 0)
+
+    model = None
+    latency_ms = None
+    try:
+        inner = ai_debug.get("ai_debug") or {}
+        model = inner.get("model")
+        elapsed_sec = inner.get("elapsed_sec")
+        if isinstance(elapsed_sec, (int, float)):
+            latency_ms = float(elapsed_sec) * 1000.0
+    except Exception:
+        model = None
+        latency_ms = None
+
+    is_guest = user.sub.startswith("anon-")
+    role = getattr(user, "role", None)
+
+    # Calcolo costi per logging
+    cost_paid_credits = 0
+    cost_free_credits = 0
+
+    if body.tier == "premium" and decision is not None:
+        if decision.mode == "paid":
+            cost_paid_credits = TEMA_AI_PREMIUM_COST
+        elif decision.mode == "free_credit":
+            cost_free_credits = TEMA_AI_PREMIUM_COST
+
+    # Logghiamo SEMPRE, anche guest
+    try:
+        log_usage_event(
+            user_id=user.sub,
+            feature=TEMA_AI_FEATURE_KEY,
+            tier=body.tier,
+            role=role,
+            is_guest=is_guest,
+            billing_mode=billing_mode,
+            cost_paid_credits=cost_paid_credits,
+            cost_free_credits=cost_free_credits,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model,
+            latency_ms=latency_ms,
+            paid_credits_before=paid_credits_before,
+            paid_credits_after=paid_credits_after,
+            free_credits_used_before=free_credits_used_before,
+            free_credits_used_after=free_credits_used_after,
+            request_json=body.dict(),
+        )
+    except Exception as e:
+        # Non blocchiamo la risposta se il logging fallisce
+        print("[TEMA_AI] log_usage_event error:", repr(e))
+
+    # ====================================================
+    # 4) Caso: Claude non ha risposto
+    # ====================================================
     if not raw:
         return {
             "status": "error",
@@ -133,13 +219,20 @@ def tema_ai_endpoint(
             "result": None,
             "ai_debug": ai_debug,
             "billing": {
-                "mode": decision.mode,
-                "remaining_credits": state.paid_credits,
+                "mode": billing_mode,
+                "remaining_credits": (
+                    state.paid_credits if state is not None else None
+                ),
+                "cost_credits": (
+                    TEMA_AI_PREMIUM_COST
+                    if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
+                    else 0
+                ),
             },
         }
 
     # ====================================================
-    # 4) Parse JSON dall'AI
+    # 5) Parse JSON dall'AI
     # ====================================================
     parsed = None
     parse_error = None
@@ -149,7 +242,7 @@ def tema_ai_endpoint(
         parse_error = str(e)
 
     # ====================================================
-    # 5) Risposta finale
+    # 6) Risposta finale
     # ====================================================
     return {
         "status": "ok",
@@ -163,9 +256,15 @@ def tema_ai_endpoint(
             "content": parsed,
         },
         "ai_debug": ai_debug,
-        # Info di billing utili per DYANA / UI
         "billing": {
-            "mode": decision.mode,          # "paid" | "free_try"
-            "remaining_credits": state.paid_credits,
+            "mode": billing_mode,                 # "free", "paid" o "free_credit"
+            "remaining_credits": (
+                state.paid_credits if state is not None else None
+            ),
+            "cost_credits": (
+                TEMA_AI_PREMIUM_COST
+                if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
+                else 0
+            ),
         },
     }
