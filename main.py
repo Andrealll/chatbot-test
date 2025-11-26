@@ -684,7 +684,7 @@ except Exception as e:
 # ROUTER OROSCOPO AI (opzionale)
 # ---------------------------------------------------------
 try:
-    from routes.oroscopo_ai import router as oroscopo_ai_router
+    from routes.routes_oroscopo_ai import router as oroscopo_ai_router
     app.include_router(oroscopo_ai_router)
     print("[DEBUG] oroscopo_ai included")
 except Exception as e:
