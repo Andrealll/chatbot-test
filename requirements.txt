@@ -15,4 +15,4 @@ requests==2.32.3
 anthropic>=0.37.0
 supabase>=2.0.0
 python-dotenv
-git+https://github.com/Andrealll/astrobot-core.git@main#egg=astrobot_core
+
