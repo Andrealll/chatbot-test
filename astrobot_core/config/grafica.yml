@@ -1,0 +1,28 @@
+schema_version: 1
+theme: light
+polar:
+  show_sign_grid: true
+  show_house_grid: true
+  show_labels: true
+  show_angles: [ASC, MC]
+  include_points: [Nodo, Lilith]
+  house_system: equal
+  start_angle_deg: 0
+  clockwise: true
+  label_font_size: 10
+  title_font_size: 14
+bars:
+  smoothing: { enabled: true, method: moving_average, window: 3 }
+  baseline_zero: true
+  label_font_size: 10
+  title_font_size: 14
+  y_scale: auto
+export:
+  dpi: 144
+  size_px: { width: 1200, height: 1200 }
+  background_transparent: false
+overrides:
+  daily: { free: { export: { dpi: 120, size_px: { width: 1000, height: 1000 } } }, premium: {} }
+  weekly: { free: { bars: { smoothing: { enabled: true, method: moving_average, window: 5 } } }, premium: {} }
+  monthly: { free: { bars: { smoothing: { enabled: true, method: moving_average, window: 7 } } }, premium: {} }
+  yearly: { free: { bars: { smoothing: { enabled: true, method: moving_average, window: 9 } } }, premium: {} }

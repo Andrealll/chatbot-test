@@ -1,0 +1,40 @@
+schema_version: 1
+weights:
+  aspects:
+    congiunzione: 1.00
+    opposizione: 0.95
+    trigono:     0.85
+    quadratura:  0.85
+    sestile:     0.65
+    quinconce:   0.45
+  planets:
+    groups:
+      luminaries:   1.20
+      personal:     1.00
+      social:       0.85
+      generational: 0.70
+      angles:       1.25
+      points:       0.60
+  houses:
+    angular:   1.10
+    succedent: 1.00
+    cadent:    0.90
+
+falloff:
+  mode: cosine
+  power: 1.0
+
+aggregation:
+  method: weighted_mean
+  snapshot_weights: recency_decay
+  lambda: 0.05
+
+overrides:
+  weekly:
+    free:
+      aggregation:
+        method: weighted_mean
+        snapshot_weights: recency_decay
+        lambda: 0.10
+      falloff:
+        power: 0.8

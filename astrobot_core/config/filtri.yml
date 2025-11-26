@@ -1,0 +1,58 @@
+schema_version: 1
+defaults:
+  include:
+    groups: [luminaries, personal, social]
+    planets: [Nodo, Lilith]
+    angles: [ASC, MC]
+  aspects: [congiunzione, opposizione, trigono, quadratura, sestile, quinconce]
+  thresholds:
+    min_orb_ratio: 0.35
+    min_strength:  0.10
+  options:
+    include_retrograde: true
+    include_houses: all
+    max_aspects_per_pair: 3
+
+profiles:
+  daily:
+    free:
+      include:
+        groups: [luminaries, personal]
+        planets: []
+      aspects: [congiunzione, opposizione, trigono, quadratura]
+      thresholds:
+        min_orb_ratio: 0.25
+        min_strength:  0.12
+    premium: {}
+
+  weekly:
+    free:
+      include:
+        groups: [luminaries, personal, social]
+        planets: []
+      aspects: [congiunzione, opposizione, trigono, quadratura, sestile, quinconce]
+      thresholds:
+        min_orb_ratio: 0.75
+        min_strength:  0.08
+    premium: {}
+
+  monthly:
+    free:
+      include:
+        groups: [luminaries, personal, social]
+        planets: []
+      thresholds:
+        min_orb_ratio: 0.30
+        min_strength:  0.15
+    premium: {}
+
+  yearly:
+    free:
+      include:
+        groups: [luminaries, personal, social]
+        planets: []
+      aspects: [congiunzione, opposizione, trigono, quadratura]
+      thresholds:
+        min_orb_ratio: 0.35
+        min_strength:  0.18
+    premium: {}

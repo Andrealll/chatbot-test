@@ -1,0 +1,31 @@
+schema_version: 1
+timezone: "Europe/Rome"
+defaults:
+  start_week_on: MONDAY
+  anchor_time: "12:00"
+profiles:
+  daily:
+    free: { strategy: fixed_times, times: ["12:00"] }
+    premium: { strategy: fixed_times, times: ["07:00","14:00","21:00"] }
+  weekly:
+    free:
+      strategy: weekdays_times
+      items:
+        - { weekday: WEDNESDAY, time: "12:00" }
+        - { weekday: SATURDAY,  time: "12:00" }
+    premium:
+      strategy: weekdays_times
+      items:
+        - { weekday: MONDAY,    time: "12:00" }
+        - { weekday: TUESDAY,   time: "12:00" }
+        - { weekday: WEDNESDAY, time: "12:00" }
+        - { weekday: THURSDAY,  time: "12:00" }
+        - { weekday: FRIDAY,    time: "12:00" }
+        - { weekday: SATURDAY,  time: "12:00" }
+        - { weekday: SUNDAY,    time: "12:00" }
+  monthly:
+    free: { strategy: days_of_month, days: [1,10,20,28], time: "12:00" }
+    premium: { strategy: every_n_days, n: 3, time: "12:00", max_events: 10 }
+  yearly:
+    free: { strategy: monthly_on_day, day: 15, time: "12:00" }
+    premium: { strategy: every_n_days, n: 3, time: "12:00", max_events: 120 }

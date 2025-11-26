@@ -1,0 +1,221 @@
+{
+  "meta": {
+    "nome": "Mario",
+    "citta_nascita": "Napoli",
+    "data_nascita": "1986-07-19",
+    "ora_nascita": "08:50",
+    "tier": "premium",
+    "scope": "oroscopo_multi_snapshot"
+  },
+  "tema": {
+    "pianeti_decod": {
+      "Sole": { "segno": "Cancro" },
+      "Luna": { "segno": "Sagittario" },
+      "Venere": { "segno": "Leone" },
+      "Marte": { "segno": "Gemelli" },
+      "Giove": { "segno": "Pesci" },
+      "Saturno": { "segno": "Scorpione" },
+      "Data": { "segno": "Ariete" }
+    },
+    "case_decod": {
+      "1": { "segno": "Leone" },
+      "2": { "segno": "Vergine" },
+      "3": { "segno": "Bilancia" },
+      "4": { "segno": "Scorpione" },
+      "5": { "segno": "Sagittario" },
+      "6": { "segno": "Capricorno" },
+      "7": { "segno": "Acquario" },
+      "8": { "segno": "Pesci" },
+      "9": { "segno": "Ariete" },
+      "10": { "segno": "Toro" },
+      "11": { "segno": "Gemelli" },
+      "12": { "segno": "Cancro" }
+    }
+  },
+  "transiti": [
+    {
+      "transit_planet": "Luna",
+      "natal_planet": "Sole",
+      "aspect": "opposizione",
+      "natal_house": 4,
+      "segno": "Capricorno"
+    },
+    {
+      "transit_planet": "Venere",
+      "natal_planet": "Marte",
+      "aspect": "quadratura",
+      "natal_house": 3,
+      "segno": "Leone"
+    },
+    {
+      "transit_planet": "Marte",
+      "natal_planet": "Giove",
+      "aspect": "trigono",
+      "natal_house": 11,
+      "segno": "Gemelli"
+    },
+    {
+      "transit_planet": "Giove",
+      "natal_planet": "Sole",
+      "aspect": "trigono",
+      "natal_house": 9,
+      "segno": "Pesci"
+    },
+    {
+      "transit_planet": "Saturno",
+      "natal_planet": "Luna",
+      "aspect": "quadratura",
+      "natal_house": 10,
+      "segno": "Scorpione"
+    }
+  ],
+  "periodi": {
+    "giornaliero": {
+      "label": "Oroscopo di oggi",
+      "tier": "premium",
+      "date_range": { "start": null, "end": null },
+      "ambiti": {
+        "energy": {
+          "score": 0.5,
+          "drivers": [
+            {
+              "transit_planet": "Luna",
+              "natal_planet": "Sole",
+              "aspect": "opposizione",
+              "natal_house": 4,
+              "segno": "Capricorno"
+            }
+          ]
+        },
+        "emotions": {
+          "score": 0.6,
+          "drivers": []
+        },
+        "relationships": {
+          "score": 0.7,
+          "drivers": []
+        },
+        "work": {
+          "score": 0.4,
+          "drivers": []
+        },
+        "luck": {
+          "score": 0.8,
+          "drivers": []
+        }
+      }
+    },
+    "settimanale": {
+      "label": "Oroscopo della settimana",
+      "tier": "premium",
+      "date_range": { "start": null, "end": null },
+      "ambiti": {
+        "energy": {
+          "score": 0.6,
+          "drivers": [
+            {
+              "transit_planet": "Venere",
+              "natal_planet": "Marte",
+              "aspect": "quadratura",
+              "natal_house": 3,
+              "segno": "Leone"
+            }
+          ]
+        },
+        "emotions": {
+          "score": 0.7,
+          "drivers": []
+        },
+        "relationships": {
+          "score": 0.8,
+          "drivers": []
+        },
+        "work": {
+          "score": 0.5,
+          "drivers": []
+        },
+        "luck": {
+          "score": 0.7,
+          "drivers": []
+        }
+      }
+    },
+    "mensile": {
+      "label": "Oroscopo del mese",
+      "tier": "premium",
+      "date_range": { "start": null, "end": null },
+      "ambiti": {
+        "energy": {
+          "score": 0.7,
+          "drivers": [
+            {
+              "transit_planet": "Marte",
+              "natal_planet": "Giove",
+              "aspect": "trigono",
+              "natal_house": 11,
+              "segno": "Gemelli"
+            }
+          ]
+        },
+        "emotions": {
+          "score": 0.6,
+          "drivers": []
+        },
+        "relationships": {
+          "score": 0.7,
+          "drivers": []
+        },
+        "work": {
+          "score": 0.6,
+          "drivers": []
+        },
+        "luck": {
+          "score": 0.9,
+          "drivers": []
+        }
+      }
+    },
+    "annuale": {
+      "label": "Oroscopo dell’anno",
+      "tier": "premium",
+      "date_range": { "start": null, "end": null },
+      "ambiti": {
+        "energy": {
+          "score": 0.8,
+          "drivers": [
+            {
+              "transit_planet": "Giove",
+              "natal_planet": "Sole",
+              "aspect": "trigono",
+              "natal_house": 9,
+              "segno": "Pesci"
+            },
+            {
+              "transit_planet": "Saturno",
+              "natal_planet": "Luna",
+              "aspect": "quadratura",
+              "natal_house": 10,
+              "segno": "Scorpione"
+            }
+          ]
+        },
+        "emotions": {
+          "score": 0.9,
+          "drivers": []
+        },
+        "relationships": {
+          "score": 0.8,
+          "drivers": []
+        },
+        "work": {
+          "score": 0.7,
+          "drivers": []
+        },
+        "luck": {
+          "score": 0.95,
+          "drivers": []
+        }
+      }
+    }
+  }
+}

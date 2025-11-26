@@ -1,0 +1,13 @@
+schema_version: 1
+base:
+  congiunzione: 8.0
+  opposizione:  7.0
+  trigono:      6.0
+  quadratura:   6.0
+  sestile:      4.0
+  quinconce:    3.0
+multipliers:
+  by_group: { luminaries: 1.35, personal: 1.0, social: 0.9, generational: 0.75, points: 0.8 }
+  angles: 1.20
+modes: { context: { natal: 1.0, transit: 0.95 } }
+limits: { min_orb_deg: 0.5 }
