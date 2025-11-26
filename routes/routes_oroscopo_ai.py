@@ -1,21 +1,19 @@
 # chatbot_test/routes_oroscopo.py
 
 import logging
-from typing import Any, Dict, Optional, Tuple, List, Literal
+from typing import Any, Dict, Optional, List, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator
-
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import calendar
-import time
 
 from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
 from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
 from astrobot_core.ai_oroscopo_claude import call_claude_oroscopo_ai
 
-# === IMPORT PER AUTH + CREDITI (COME SINASTRIA) ===
+# === AUTH + CREDITI (stesso schema di sinastria_ai) ===
 from auth import get_current_user, UserContext
 from astrobot_auth.credits_logic import (
     load_user_credits_state,
@@ -28,10 +26,8 @@ from astrobot_auth.credits_logic import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    # senza prefix qui: verrà montato dal main con prefix="/oroscopo_ai"
-    tags=["oroscopo_ai"],
-)
+# Router DEDICATO a oroscopo AI
+router = APIRouter(prefix="/oroscopo_ai", tags=["oroscopo_ai"])
 
 # ============================================================
 # Costanti / tipi
@@ -39,11 +35,9 @@ router = APIRouter(
 
 Periodo = Literal["daily", "weekly", "monthly", "yearly"]
 Tier = Literal["free", "premium"]
-Engine = Literal["ai", "new", "legacy"]  # ai = pipeline completa (Claude), new = numerico
+Engine = Literal["ai"]  # niente "new", niente "legacy"
 
-OROSCOPO_FEATURE_KEY = "oroscopo_ai"
-
-# Costi per oroscopo premium AI (parametrici, per periodo)
+OROSCOPO_FEATURE_KEY_PREFIX = "oroscopo_ai"
 OROSCOPO_FEATURE_COSTS: Dict[Periodo, int] = {
     "daily": 1,
     "weekly": 2,
@@ -72,10 +66,10 @@ PERIODO_IT_TO_CODE = {
 # MODELLI INPUT / OUTPUT
 # ============================================================
 
-class OroscopoBaseInput(BaseModel):
+class OroscopoAIRequest(BaseModel):
     """
-    Input comune a tutti i periodi.
-    Questa struttura è quella che userai sia da DYANA che da Typebot.
+    Input per oroscopo_ai/{periodo}
+    Usato sia da DYANA sia da Typebot.
     """
     citta: str = Field(..., description="Città di nascita (es. 'Napoli')")
     data: str = Field(..., description="Data di nascita in formato YYYY-MM-DD")
@@ -83,20 +77,19 @@ class OroscopoBaseInput(BaseModel):
         None,
         description="Ora di nascita in formato HH:MM (24h). Obbligatoria se vuoi l'ascendente preciso."
     )
-    nome: Optional[str] = Field(None, description="Nome della persona (opzionale, usato solo nel testo)")
+    nome: Optional[str] = Field(None, description="Nome della persona (opzionale, usato nel testo)")
     email: Optional[str] = None
     domanda: Optional[str] = Field(
         None,
         description="Eventuale domanda specifica da passare all'AI."
     )
-    tier: Optional[Tier] = Field(
-        None,
-        description="free / premium. Se non passato, verrà determinato dal token/JWT."
+    tier: Optional[str] = Field(
+        "free",
+        description="free / premium. Se non passato, default = free.",
     )
 
     @validator("data")
     def _validate_data(cls, v: str) -> str:
-        # Controllo minimale sul formato, senza usare dateutil
         if len(v) != 10 or v[4] != "-" or v[7] != "-":
             raise ValueError("data deve essere in formato YYYY-MM-DD")
         return v
@@ -116,13 +109,11 @@ class OroscopoBaseInput(BaseModel):
 
 class OroscopoResponse(BaseModel):
     """
-    Response 'macro' /oroscopo.
-    - engine: "ai" quando usi la pipeline completa con Claude
-    - engine: "new" quando usi solo il motore numerico (multi-snapshot) senza AI
+    Response per /oroscopo_ai/{periodo}.
     """
     status: Literal["ok", "error"]
     scope: Periodo
-    engine: Engine
+    engine: Engine  # sempre "ai"
     input: Dict[str, Any]
 
     # Risultato del motore numerico (multi-snapshot, intensità, grafico, ecc.)
@@ -137,19 +128,16 @@ class OroscopoResponse(BaseModel):
     # In caso di errore
     error: Optional[str] = None
 
-    # Blocco billing allineato a sinastria: tier, mode, cost_paid_credits, cost_free_credits, remaining_credits
+    # Blocco billing (schema stile sinastria_ai)
     billing: Optional[Dict[str, Any]] = None
 
 
 # ============================================================
-# Helpers interni
+# Helpers interni (periodi, aggregazioni, payload AI)
+# (NON tocco la logica astrologica, è la stessa che avevi già)
 # ============================================================
 
 def _normalize_period(periodo: str) -> Periodo:
-    """
-    Normalizza alias tipo "giornaliero" -> "daily", ecc.
-    Se non riconosciuto, tira 400.
-    """
     p = periodo.lower().strip()
 
     mapping = {
@@ -180,46 +168,14 @@ def _normalize_period(periodo: str) -> Periodo:
     return mapping[p]  # type: ignore[return-value]
 
 
-def _resolve_tier(request: Request, body_tier: Optional[Tier]) -> Tier:
-    """
-    Regola unica per stabilire il tier:
-    1) Se da JWT / cookie / whatever (da implementare)
-    2) altrimenti fallback su body.tier
-    3) altrimenti 'free'
-    """
-    # TODO: collega qui la tua logica reale di risoluzione tier dal JWT
-    tier_from_token: Optional[Tier] = None  # placeholder
-
-    if tier_from_token is not None:
-        return tier_from_token
-    if body_tier is not None:
-        return body_tier
+def _normalize_tier(raw: Optional[str]) -> Tier:
+    if not raw:
+        return "free"
+    s = raw.strip().lower()
+    if s in {"premium", "pro", "paid"}:
+        return "premium"
     return "free"
 
-
-def _resolve_engine(x_engine: Optional[str]) -> Engine:
-    """
-    Interpreta l'header X-Engine:
-    - "ai"      → usa pipeline completa (motore numerico + payload_ai + Claude)
-    - "new"     → solo motore numerico (multi-snapshot), senza AI
-    - "legacy"  → eventuale vecchio motore (se vorrai reintrodurlo)
-    - None      → default: "ai"
-    """
-    if x_engine is None or x_engine.strip() == "":
-        return "ai"
-
-    value = x_engine.lower().strip()
-    if value not in ("ai", "new", "legacy"):
-        raise HTTPException(
-            status_code=400,
-            detail="X-Engine deve essere uno tra: ai, new, legacy"
-        )
-    return value  # type: ignore[return-value]
-
-
-# ============================================================
-# STRUTTURA PERSONA (per riusare la logica del test)
-# ============================================================
 
 @dataclass
 class Persona:
@@ -230,10 +186,6 @@ class Persona:
     periodo: str   # "giornaliero" | "settimanale" | "mensile" | "annuale"
     tier: str      # "free" | "premium"
 
-
-# ============================================================
-# HELPER ORB/DATE UTILIZZATI NELLA PIPE OROSCOPO
-# ============================================================
 
 def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
     if today is None:
@@ -247,17 +199,6 @@ def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
 
 
 def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Copia della logica del test:
-    - giornaliero free: nessun sottoperiodo
-    - giornaliero premium: mattina, pomeriggio, domani
-    - settimanale free: settimana, weekend
-    - settimanale premium: inizio settimana, metà settimana, weekend
-    - mensile free: nessun sottoperiodo
-    - mensile premium: 3 decadi
-    - annuale free: nessun sottoperiodo
-    - annuale premium: 4 stagioni
-    """
     today = date.today()
     periodo = (periodo or "").lower()
     tier = (tier or "").lower()
@@ -488,7 +429,7 @@ def _aggregate_monthly_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     today = date.today()
     dt0 = _safe_iso_to_dt(samples[0].get("datetime"), today=today)
     year, month = dt0.year, dt0.month
-    _, last_day = calendar.monthrange(year, month)  # non usato direttamente, ma coerente
+    _, _last_day = calendar.monthrange(year, month)
 
     buckets = {
         "prima_decade": [],
@@ -573,12 +514,10 @@ def _aggregate_metriche_for_period(metriche_grafico: Dict[str, Any], persona: Pe
 
 
 def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
-    # 1) Vecchio stile
     po = pipe.get("periodo_output")
     if isinstance(po, dict) and ("date_range" in po or "aspetti_rilevanti" in po):
         return po
 
-    # 2) Strutture periodi / periodi_multi
     periodi = pipe.get("periodi") or pipe.get("periodi_multi")
     if isinstance(periodi, dict) and periodi:
         key_ita = persona.periodo
@@ -588,7 +527,6 @@ def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]
             if k in periodi and isinstance(periodi[k], dict):
                 return periodi[k]
 
-    # 3) Ricerca ricorsiva generica
     def _search(d: Any) -> Optional[Dict[str, Any]]:
         if isinstance(d, dict):
             keys = set(d.keys())
@@ -771,22 +709,16 @@ def _build_payload_ai(
     scope: Periodo,
     tier: Tier,
     engine_result: Dict[str, Any],
-    data_input: OroscopoBaseInput,
+    data_input: OroscopoAIRequest,
 ) -> Dict[str, Any]:
-    """
-    Costruisce il payload_ai da passare a Claude usando:
-    - pipe = output di run_oroscopo_multi_snapshot
-    - oroscopo_struct = stessa logica del test end-to-end
-    - build_oroscopo_payload_ai di astrobot_core
-    """
     logger.info(
-        "[OROSCOPO][PAYLOAD_AI] scope=%s tier=%s nome=%s",
+        "[OROSCOPO_AI][PAYLOAD] scope=%s tier=%s nome=%s",
         scope, tier, data_input.nome
     )
 
     pipe = engine_result.get("pipe") or {}
     if not pipe:
-        raise RuntimeError("engine_result.pipe mancante: assicurati che _run_oroscopo_engine_new sia stato chiamato correttamente.")
+        raise RuntimeError("engine_result.pipe mancante: assicurati che il motore numerico sia stato chiamato.")
 
     periodo_ita = PERIODO_EN_TO_IT[scope]
     persona = Persona(
@@ -798,13 +730,9 @@ def _build_payload_ai(
         tier=tier,
     )
 
-    # 1) oroscopo_struct dalla pipe (stessa logica del test)
     oroscopo_struct = build_oroscopo_struct_from_pipe(pipe, persona)
-
-    # 2) period_code in stile "daily"/"weekly"/...
     period_code = PERIODO_IT_TO_CODE.get(periodo_ita, scope)
 
-    # 3) payload AI usando il modulo ufficiale (prompt incluso lì)
     payload_ai = build_oroscopo_payload_ai(
         oroscopo_struct=oroscopo_struct,
         lang="it",
@@ -815,25 +743,18 @@ def _build_payload_ai(
 
 
 def _call_oroscopo_ai_claude(payload_ai: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Delego tutto al client in astrobot-core.
-    """
     return call_claude_oroscopo_ai(payload_ai)
 
 
-def _run_oroscopo_engine_new(
+def _run_oroscopo_engine(
     scope: Periodo,
     tier: Tier,
-    data_input: OroscopoBaseInput,
+    data_input: OroscopoAIRequest,
 ) -> Dict[str, Any]:
-    """
-    Wrapper per il motore numerico multi-snapshot di AstroBot.
-    Usa run_oroscopo_multi_snapshot da astrobot_core.
-    """
-    periodo_ita = PERIODO_EN_TO_IT[scope]  # es. "daily" -> "giornaliero"
+    periodo_ita = PERIODO_EN_TO_IT[scope]
 
     logger.info(
-        "[OROSCOPO][ENGINE_NEW] scope=%s (ita=%s) tier=%s citta=%s data=%s",
+        "[OROSCOPO_AI][ENGINE] scope=%s (ita=%s) tier=%s citta=%s data=%s",
         scope, periodo_ita, tier, data_input.citta, data_input.data
     )
 
@@ -856,46 +777,47 @@ def _run_oroscopo_engine_new(
 
 
 # ============================================================
-# ROUTE MACRO /oroscopo_ai/{periodo} (via prefix nel main)
+# ROUTE UNICA /oroscopo_ai/{periodo}
 # ============================================================
 
 @router.post(
     "/{periodo}",
     response_model=OroscopoResponse,
-    summary="Oroscopo macro (daily/weekly/monthly/yearly, free/premium, motore AI completo)",
+    summary="Oroscopo AI (daily/weekly/monthly/yearly, free/premium, billing semplice)",
 )
-async def oroscopo_macro(
+async def oroscopo_ai_endpoint(
     periodo: str,
-    data_input: OroscopoBaseInput,
-    request: Request,
-    x_engine: Optional[str] = Header(None, alias="X-Engine"),
-    user: UserContext = Depends(get_current_user),  # utente dal JWT
+    payload: OroscopoAIRequest,
+    user: UserContext = Depends(get_current_user),
 ) -> OroscopoResponse:
     """
-    Route unica per tutti gli oroscopi.
-
-    Con prefix nel main="/oroscopo_ai", i path effettivi sono:
-    - /oroscopo_ai/daily
-    - /oroscopo_ai/weekly
-    - /oroscopo_ai/monthly
-    - /oroscopo_ai/yearly
+    Esempi path:
+    - POST /oroscopo_ai/daily
+    - POST /oroscopo_ai/weekly
+    - POST /oroscopo_ai/monthly
+    - POST /oroscopo_ai/yearly
     """
-    start = time.time()
-
     scope: Periodo = _normalize_period(periodo)
-    tier: Tier = _resolve_tier(request, data_input.tier)
-    engine: Engine = _resolve_engine(x_engine)
+    tier: Tier = _normalize_tier(payload.tier)
+
+    logger.info(
+        "[OROSCOPO_AI] scope=%s tier=%s citta=%s data=%s nome=%s",
+        scope, tier, payload.citta, payload.data, payload.nome
+    )
+
+    engine: Engine = "ai"
 
     # ==========================================
-    # 0) GATING CREDITI (solo premium + engine=ai)
+    # 0) GATING CREDITI (solo tier premium)
     # ==========================================
     state = None
     decision: Optional[PremiumDecision] = None
     feature_cost = 0
 
-    if tier == "premium" and engine == "ai":
+    if tier == "premium":
         state = load_user_credits_state(user)
         decision = decide_premium_mode(state)
+
         feature_cost = OROSCOPO_FEATURE_COSTS.get(scope, 0)
         if feature_cost <= 0:
             raise HTTPException(
@@ -908,44 +830,27 @@ async def oroscopo_macro(
             decision,
             feature_cost=feature_cost,
         )
-
         save_user_credits_state(state)
-
-    logger.info(
-        "[OROSCOPO] scope=%s tier=%s engine=%s citta=%s data=%s nome=%s",
-        scope, tier, engine, data_input.citta, data_input.data, data_input.nome
-    )
 
     try:
         # ==========================================
         # 1) Motore numerico
         # ==========================================
-        engine_result = _run_oroscopo_engine_new(scope=scope, tier=tier, data_input=data_input)
-
-        payload_ai: Optional[Dict[str, Any]] = None
-        oroscopo_ai: Optional[Dict[str, Any]] = None
+        engine_result = _run_oroscopo_engine(scope=scope, tier=tier, data_input=payload)
 
         # ==========================================
-        # 2) AI (Claude) se richiesto
+        # 2) Payload AI + Claude
         # ==========================================
-        if engine == "ai":
-            payload_ai = _build_payload_ai(
-                scope=scope,
-                tier=tier,
-                engine_result=engine_result,
-                data_input=data_input,
-            )
-            oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
-        elif engine == "legacy":
-            raise HTTPException(
-                status_code=501,
-                detail="Motore legacy non più supportato. Usa X-Engine: ai oppure new."
-            )
-
-        elapsed = time.time() - start
+        payload_ai = _build_payload_ai(
+            scope=scope,
+            tier=tier,
+            engine_result=engine_result,
+            data_input=payload,
+        )
+        oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
 
         # ==========================================
-        # 3) Estrazione usage (se presente, come sinastria)
+        # 3) USAGE / TOKEN (per ora 0/0)
         # ==========================================
         tokens_in = 0
         tokens_out = 0
@@ -962,7 +867,7 @@ async def oroscopo_macro(
             tokens_out = 0
 
         # ==========================================
-        # 4) COSTI & BILLING (paid vs free_credit vs free)
+        # 4) BILLING (stile sinastria_ai)
         # ==========================================
         is_guest = user.sub.startswith("anon-")
 
@@ -997,16 +902,12 @@ async def oroscopo_macro(
         # 5) LOG USAGE (anche guest, con request_json)
         # ==========================================
         try:
-            request_json = {
-                "scope": scope,
-                "engine": engine,
-                "tier": tier,
-                "input": data_input.dict(),
-            }
+            request_json = payload.dict()
+            feature_name = f"{OROSCOPO_FEATURE_KEY_PREFIX}_{scope}"
 
             log_usage_event(
                 user_id=user.sub,
-                feature=f"{OROSCOPO_FEATURE_KEY}_{scope}",
+                feature=feature_name,
                 tier=tier,
                 billing_mode=billing_mode,
                 cost_paid_credits=cost_paid_credits,
@@ -1017,16 +918,16 @@ async def oroscopo_macro(
                 request_json=request_json,
             )
         except Exception:
-            logger.exception("[OROSCOPO] Errore nel logging usage")
+            logger.exception("[OROSCOPO_AI] Errore nel logging usage")
 
         # ==========================================
-        # 6) Risposta finale
+        # 6) RISPOSTA
         # ==========================================
         return OroscopoResponse(
             status="ok",
             scope=scope,
             engine=engine,
-            input=data_input.dict(),
+            input=payload.dict(),
             engine_result=engine_result,
             payload_ai=payload_ai,
             oroscopo_ai=oroscopo_ai,
@@ -1037,7 +938,8 @@ async def oroscopo_macro(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("[OROSCOPO] Errore non gestito")
+        logger.exception("[OROSCOPO_AI] Errore non gestito")
+
         billing_error = {
             "tier": tier,
             "scope": scope,
@@ -1047,11 +949,12 @@ async def oroscopo_macro(
             "cost_paid_credits": 0,
             "cost_free_credits": 0,
         }
+
         return OroscopoResponse(
             status="error",
             scope=scope,
             engine=engine,
-            input=data_input.dict(),
+            input=payload.dict(),
             engine_result=None,
             payload_ai=None,
             oroscopo_ai=None,
