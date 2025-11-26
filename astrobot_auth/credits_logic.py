@@ -10,7 +10,7 @@ IMPORTANTE:
 - Non richiede sottocartelle tipo astrobot_auth.astrobot_auth.
 """
 
-from credits_logic_old import (
+from astrobot_auth.credits_logic import (
     load_user_credits_state,
     save_user_credits_state,
     decide_premium_mode,
