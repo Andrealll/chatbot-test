@@ -1,12 +1,16 @@
 """
-Shim per esporre astrobot_auth.credits_logic anche nel backend chatbot-test.
+Shim per esporre astrobot_auth.credits_logic dentro il progetto chatbot-test.
 
-NON sposta nulla: reimporta semplicemente dal package interno
-C:\...\astrobot_auth\astrobot_auth\credits_logic.py
-quando il repo completo è presente come sottocartella.
+Usa il modulo locale `credits_logic_old.py` che sta nella root del repo.
+Su Render verrà caricato insieme al resto del codice, quindi
+questo shim funziona sia in locale sia in produzione.
+
+IMPORTANTE:
+- Non sposta nulla dal repo astrobot_auth esterno.
+- Non richiede sottocartelle tipo astrobot_auth.astrobot_auth.
 """
 
-from .astrobot_auth.credits_logic import (
+from credits_logic_old import (
     load_user_credits_state,
     save_user_credits_state,
     decide_premium_mode,
