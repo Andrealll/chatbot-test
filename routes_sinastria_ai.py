@@ -67,20 +67,9 @@ async def sinastria_ai_endpoint(
     decision: Optional[PremiumDecision] = None
 
     if tier == "premium":
-        # Carica stato crediti (paid + free credits guest/user)
         state = load_user_credits_state(user)
-
-        # Decide: paid / free_credit / denied
         decision = decide_premium_mode(state)
-
-        # Applica il consumo (paid o free_credit) o solleva 402
-        apply_premium_consumption(
-            state,
-            decision,
-            feature_cost=SINASTRIA_FEATURE_COST,
-        )
-
-        # Salva stato aggiornato
+        apply_premium_consumption(state, decision, feature_cost=SINASTRIA_FEATURE_COST)
         save_user_credits_state(state)
 
     try:
@@ -133,7 +122,6 @@ async def sinastria_ai_endpoint(
         tokens_in = 0
         tokens_out = 0
         try:
-            # se ai_sinastria_claude ritorna qualcosa tipo {"ai_debug": {"usage": {...}}}
             ai_debug_block = None
             if isinstance(sinastria_ai, dict):
                 ai_debug_block = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
@@ -146,7 +134,7 @@ async def sinastria_ai_endpoint(
             tokens_out = 0
 
         # ==========================================
-        # 6) COSTI & BILLING (paid vs free_credit vs free)
+        # 6) COSTI & BILLING
         # ==========================================
         is_guest = user.sub.startswith("anon-")
 
@@ -156,16 +144,13 @@ async def sinastria_ai_endpoint(
         cost_free_credits = 0
 
         if tier == "premium" and state is not None and decision is not None:
-            billing_mode = decision.mode  # "paid" | "free_credit"
+            billing_mode = decision.mode
             remaining_credits = state.paid_credits
 
             if decision.mode == "paid":
                 cost_paid_credits = SINASTRIA_FEATURE_COST
             elif decision.mode == "free_credit":
                 cost_free_credits = SINASTRIA_FEATURE_COST
-        else:
-            billing_mode = "free"
-            remaining_credits = None
 
         billing = {
             "tier": tier,
@@ -176,7 +161,7 @@ async def sinastria_ai_endpoint(
         }
 
         # ==========================================
-        # 7) LOG USAGE (anche guest, con request_json)
+        # 7) LOG USAGE (PATCH MINIMA)
         # ==========================================
         try:
             request_json = {
@@ -185,6 +170,9 @@ async def sinastria_ai_endpoint(
                 "tier": tier,
             }
 
+            # 🔥 patch minima: compatibilità credits_logic
+            cost_credits = cost_paid_credits or cost_free_credits
+
             log_usage_event(
                 user_id=user.sub,
                 feature=SINASTRIA_FEATURE_KEY,
@@ -192,6 +180,7 @@ async def sinastria_ai_endpoint(
                 billing_mode=billing_mode,
                 cost_paid_credits=cost_paid_credits,
                 cost_free_credits=cost_free_credits,
+                cost_credits=cost_credits,     # <--- AGGIUNTO
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 is_guest=is_guest,

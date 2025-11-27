@@ -66,20 +66,19 @@ def tema_ai_endpoint(
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"  # default per tier free
 
-    paid_credits_before = None
-    paid_credits_after = None
-    free_credits_used_before = None
-    free_credits_used_after = None
+    paid_credits_before: Optional[int] = None
+    paid_credits_after: Optional[int] = None
+    free_credits_before: Optional[int] = None
+    free_credits_after: Optional[int] = None
 
     if body.tier == "premium":
         state = load_user_credits_state(user)
 
         paid_credits_before = state.paid_credits
-        free_credits_used_before = state.free_tries_used
+        free_credits_before = state.free_credits
 
         decision = decide_premium_mode(state)
 
-        # Se non allowed o crediti insufficienti, qui scatta HTTPException 402
         apply_premium_consumption(
             state,
             decision,
@@ -89,7 +88,7 @@ def tema_ai_endpoint(
         save_user_credits_state(state)
 
         paid_credits_after = state.paid_credits
-        free_credits_used_after = state.free_tries_used
+        free_credits_after = state.free_credits
 
         if decision.mode == "paid":
             billing_mode = "paid"
@@ -98,7 +97,6 @@ def tema_ai_endpoint(
         else:
             billing_mode = "denied"
     else:
-        # tier free: NON tocchiamo i crediti, ma teniamo traccia del fatto che è free
         billing_mode = "free"
 
     # ====================================================
@@ -126,7 +124,7 @@ def tema_ai_endpoint(
             nome=body.nome,
             email=body.email,
             domanda=body.domanda,
-            tier=body.tier,   # "free" o "premium" influenza il prompt
+            tier=body.tier,
         )
     except Exception as e:
         raise HTTPException(
@@ -157,18 +155,6 @@ def tema_ai_endpoint(
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
 
-    model = None
-    latency_ms = None
-    try:
-        inner = ai_debug.get("ai_debug") or {}
-        model = inner.get("model")
-        elapsed_sec = inner.get("elapsed_sec")
-        if isinstance(elapsed_sec, (int, float)):
-            latency_ms = float(elapsed_sec) * 1000.0
-    except Exception:
-        model = None
-        latency_ms = None
-
     is_guest = user.sub.startswith("anon-")
     role = getattr(user, "role", None)
 
@@ -182,29 +168,24 @@ def tema_ai_endpoint(
         elif decision.mode == "free_credit":
             cost_free_credits = TEMA_AI_PREMIUM_COST
 
-    # Logghiamo SEMPRE, anche guest
+    # Compatibilità totale con credits_logic.log_usage_event
+    cost_credits = cost_paid_credits or cost_free_credits
+
     try:
         log_usage_event(
             user_id=user.sub,
             feature=TEMA_AI_FEATURE_KEY,
             tier=body.tier,
-            role=role,
-            is_guest=is_guest,
             billing_mode=billing_mode,
             cost_paid_credits=cost_paid_credits,
             cost_free_credits=cost_free_credits,
+            cost_credits=cost_credits,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
-            model=model,
-            latency_ms=latency_ms,
-            paid_credits_before=paid_credits_before,
-            paid_credits_after=paid_credits_after,
-            free_credits_used_before=free_credits_used_before,
-            free_credits_used_after=free_credits_used_after,
+            is_guest=is_guest,
             request_json=body.dict(),
         )
     except Exception as e:
-        # Non blocchiamo la risposta se il logging fallisce
         print("[TEMA_AI] log_usage_event error:", repr(e))
 
     # ====================================================
@@ -220,9 +201,10 @@ def tema_ai_endpoint(
             "ai_debug": ai_debug,
             "billing": {
                 "mode": billing_mode,
-                "remaining_credits": (
-                    state.paid_credits if state is not None else None
-                ),
+                "paid_credits_before": paid_credits_before,
+                "paid_credits_after": paid_credits_after,
+                "free_credits_before": free_credits_before,
+                "free_credits_after": free_credits_after,
                 "cost_credits": (
                     TEMA_AI_PREMIUM_COST
                     if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
@@ -257,10 +239,11 @@ def tema_ai_endpoint(
         },
         "ai_debug": ai_debug,
         "billing": {
-            "mode": billing_mode,                 # "free", "paid" o "free_credit"
-            "remaining_credits": (
-                state.paid_credits if state is not None else None
-            ),
+            "mode": billing_mode,
+            "paid_credits_before": paid_credits_before,
+            "paid_credits_after": paid_credits_after,
+            "free_credits_before": free_credits_before,
+            "free_credits_after": free_credits_after,
             "cost_credits": (
                 TEMA_AI_PREMIUM_COST
                 if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))

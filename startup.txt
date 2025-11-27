@@ -1,0 +1,35 @@
+:: APRI ANACONDA PROMPT
+
+:: 1. Vai nella cartella del progetto backend principale
+cd C:\Users\Utente\Documents\GitHub\chatbot-test
+
+:: 2. Attiva l'ambiente con astrobot
+conda activate astrobot
+
+:: 3. Avvia FastAPI (backend AstroBot)
+uvicorn main:app --reload --host 0.0.0.0 --port 8001
+
+
+:: APRI UNA NUOVA FINESTRA DI ANACONDA PROMPT
+
+:: 1. Vai nella cartella di astrobot_auth
+cd C:\Users\Utente\Documents\GitHub\astrobot_auth
+
+:: 2. Attiva sempre lo stesso ambiente
+conda activate astrobot
+
+:: 3. Avvia il server di auth
+uvicorn main:app --reload --host 0.0.0.0 --port 8002
+
+
+
+:: APRI PROMPT DEI COMANDI (normale)
+
+:: 1. Vai nella cartella del frontend
+cd C:\Users\Utente\Documents\GitHub\dyana-web
+
+:: 2. (Solo la prima volta) installa le dipendenze
+npm install
+
+:: 3. Avvia Next.js in dev
+npm run dev

@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
-
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # === DEBUG CREDITS / SUPABASE ===
 try:
     from credits_logic import SUPABASE_URL, USE_SUPABASE
