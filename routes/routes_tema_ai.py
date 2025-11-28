@@ -1,6 +1,6 @@
 # routes/routes_tema_ai.py
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import json
@@ -51,6 +51,7 @@ class TemaAIRequest(BaseModel):
 @router.post("/tema_ai")
 def tema_ai_endpoint(
     body: TemaAIRequest,
+    request: Request,
     user: UserContext = Depends(get_current_user),
 ):
     """
@@ -192,6 +193,17 @@ def tema_ai_endpoint(
         elif decision.mode == "free_credit":
             cost_free_credits = TEMA_AI_PREMIUM_COST
 
+    # === Metadati di navigazione dal frontend DYANA ===
+    client_source = request.headers.get("x-client-source") or "unknown"
+    client_session = request.headers.get("x-client-session")
+
+    # request_json arricchito con body + info di navigazione
+    request_log = {
+        "body": body.dict(),
+        "client_source": client_source,
+        "client_session": client_session,
+    }
+
     # Logghiamo SEMPRE, anche guest
     try:
         log_usage_event(
@@ -211,7 +223,7 @@ def tema_ai_endpoint(
             paid_credits_after=paid_credits_after,
             free_credits_used_before=free_credits_used_before,
             free_credits_used_after=free_credits_used_after,
-            request_json=body.dict(),
+            request_json=request_log,
         )
     except Exception as e:
         # Non blocchiamo la risposta se il logging fallisce
