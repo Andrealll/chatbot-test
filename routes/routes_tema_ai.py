@@ -64,24 +64,25 @@ def tema_ai_endpoint(
     """
 
     # ====================================================
-    # 0) GATING CREDITI (solo per PREMIUM)
+    # 0) STATO CREDITI + GATING (consumo solo PREMIUM)
+    #    (MODIFICA CONCORDATA: registriamo anche le FREE)
     # ====================================================
-    state = None
+    # Carichiamo SEMPRE lo stato crediti (guest / user)
+    state = load_user_credits_state(user)
+
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"  # default per tier free
 
-    paid_credits_before: Optional[int] = None
-    paid_credits_after: Optional[int] = None
-    free_credits_used_before: Optional[int] = None
-    free_credits_used_after: Optional[int] = None
+    # snapshot prima del consumo (valida sia per free che premium)
+    paid_credits_before: Optional[int] = state.paid_credits
+    free_credits_used_before: Optional[int] = state.free_tries_used
+
+    paid_credits_after: Optional[int] = state.paid_credits
+    free_credits_used_after: Optional[int] = state.free_tries_used
 
     if body.tier == "premium":
         # Stato crediti + free_tries (entitlements/guests/supabase + fallback RAM)
-        state = load_user_credits_state(user)
-
-        # snapshot prima del consumo (per logging)
-        paid_credits_before = state.paid_credits
-        free_credits_used_before = state.free_tries_used
+        # (state è già caricato sopra)
 
         # Decidi: "paid" | "free_credit" (o 402 se niente)
         decision = decide_premium_mode(state)
@@ -107,8 +108,13 @@ def tema_ai_endpoint(
         else:
             billing_mode = "denied"
     else:
-        # tier free: NON tocchiamo crediti, ma teniamo traccia del fatto che è free
+        # tier free:
+        # - NON tocchiamo i crediti (nessun consumo)
+        # - MA salviamo comunque lo stato per registrare/aggiornare
+        #   guests/entitlements (es. last_seen, day, ecc.)
+        save_user_credits_state(state)
         billing_mode = "free"
+        # after = before, li lasciamo già impostati
 
     # ====================================================
     # 1) Calcolo tema natale
