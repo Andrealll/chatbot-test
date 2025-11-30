@@ -600,6 +600,8 @@ def transiti_premium_endpoint(
 
 
 print("[DEBUG] /transiti/premium defined")
+print("[DEBUG] /transiti/premium defined")
+
 # ---------------------------------------------------------
 # ROUTER TEMA_AI (separato)
 # ---------------------------------------------------------
@@ -612,45 +614,6 @@ except Exception as e:
     print(f"[WARN] routes_tema_ai non caricato: {e}")
 
 # ---------------------------------------------------------
-# /oroscopo_site — STUB per DYANA (AGGIUNTO)
-# ---------------------------------------------------------
-@app.post("/oroscopo_site", tags=["Oroscopo"])
-def oroscopo_site(req: OroscopoSiteRequest) -> Dict[str, Any]:
-    """
-    Endpoint *semplice* per il sito DYANA.
-
-    ADESSO è solo uno STUB:
-    - non usa ancora la pipeline vera,
-    - non chiama ancora build_oroscopo_payload_ai,
-    - non chiama ancora Claude.
-
-    Serve solo per:
-    - verificare che la route funzioni,
-    - definire la struttura base della risposta.
-    """
-    effective_tier = _resolve_tier_for_site(req.tier)
-
-    return {
-        "status": "ok",
-        "scope": req.periodo,
-        "engine": "site_stub",
-        "tier": effective_tier,
-        "input": {
-            "nome": req.nome,
-            "citta": req.citta,
-            "data_nascita": req.data_nascita,
-            "ora_nascita": req.ora_nascita,
-            "periodo": req.periodo,
-            "tier": req.tier,
-        },
-        "result": {
-            "meta": {
-                "msg": "Stub oroscopo_site: la pipeline AI non è ancora collegata.",
-                "nota": "Prossimo step: usare run_oroscopo_multi_snapshot + build_oroscopo_struct_from_pipe + build_oroscopo_payload_ai.",
-            }
-        },
-    }
-# ---------------------------------------------------------
 # ROUTER DYANA (opzionale)
 # ---------------------------------------------------------
 try:
@@ -661,38 +624,20 @@ try:
 except Exception as e:
     print(f"[WARN] routes_diyana non caricato: {e}")
 
-# ---------------------------------------------------------
-# ROUTER OROSCOPI (opzionale)
-# ---------------------------------------------------------
-try:
-    from routes_oroscopo import router as oroscopo_router
 
-    app.include_router(oroscopo_router)
-    print("[DEBUG] routes_oroscopo included")
-except Exception as e:
-    print(f"[WARN] routes_oroscopo non caricato: {e}")
-
-# ---------------------------------------------------------
-# ROUTER SINASTRIA AI (opzionale)
-# ---------------------------------------------------------
-#try:
-#    from routes_sinastria_ai import router as sinastria_ai_router
-#    app.include_router(sinastria_ai_router)
-#    print("[DEBUG] routes_sinastria_ai included")
-#except Exception as e:
-#    print(f"[WARN] routes_sinastria_ai non caricato: {e}")
-    
 # ---------------------------------------------------------
 # ROUTER OROSCOPO AI (opzionale)
 # ---------------------------------------------------------
 try:
+    # 👇 usa il file routes/routes_oroscopo_ai.py
     from routes.routes_oroscopo_ai import router as oroscopo_ai_router
+
     app.include_router(oroscopo_ai_router)
-    print("[DEBUG] oroscopo_ai included")
+    print("[DEBUG] routes_oroscopo_ai included")
 except Exception as e:
     print(f"[WARN] routes_oroscopo_ai non caricato: {e}")
-        
-    
+
+
 # ---------------------------------------------------------
 # ROUTER DEBUG (save-image, etc.)
 # ---------------------------------------------------------
@@ -703,6 +648,7 @@ try:
     print("[DEBUG] routes_debug included")
 except Exception as e:
     print(f"[WARN] routes_debug non caricato: {e}")
+
 
 
 # ---------------------------------------------------------
@@ -719,13 +665,13 @@ def root():
 print("[DEBUG] main import end")
 
 
-
 @app.get("/debug/credits_env")
 def debug_credits_env():
     return {
         "SUPABASE_URL": SUPABASE_URL,
         "USE_SUPABASE": USE_SUPABASE,
     }
+
 
 # ---------------------------------------------------------
 # ROUTER SINASTRIA AI (opzionale)
