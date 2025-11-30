@@ -675,12 +675,12 @@ except Exception as e:
 # ---------------------------------------------------------
 # ROUTER SINASTRIA AI (opzionale)
 # ---------------------------------------------------------
-try:
-    from routes_sinastria_ai import router as sinastria_ai_router
-    app.include_router(sinastria_ai_router)
-    print("[DEBUG] routes_sinastria_ai included")
-except Exception as e:
-    print(f"[WARN] routes_sinastria_ai non caricato: {e}")
+#try:
+#    from routes_sinastria_ai import router as sinastria_ai_router
+#    app.include_router(sinastria_ai_router)
+#    print("[DEBUG] routes_sinastria_ai included")
+#except Exception as e:
+#    print(f"[WARN] routes_sinastria_ai non caricato: {e}")
     
 # ---------------------------------------------------------
 # ROUTER OROSCOPO AI (opzionale)
@@ -726,3 +726,14 @@ def debug_credits_env():
         "SUPABASE_URL": SUPABASE_URL,
         "USE_SUPABASE": USE_SUPABASE,
     }
+
+# ---------------------------------------------------------
+# ROUTER SINASTRIA AI (opzionale)
+# ---------------------------------------------------------
+try:
+    from routes.routes_sinastria_ai import router as sinastria_ai_router
+
+    app.include_router(sinastria_ai_router)
+    print("[DEBUG] routes_sinastria_ai included")
+except Exception as e:
+    print(f"[WARN] routes_sinastria_ai non caricato: {e}")
