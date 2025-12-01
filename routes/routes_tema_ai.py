@@ -7,6 +7,7 @@ import json
 import logging
 
 from astrobot_core.calcoli import costruisci_tema_natale
+from astrobot_core.tema_vis_payload import build_tema_vis_payload
 from utils.payload_tema_ai import build_payload_tema_ai
 from ai_claude import call_claude_tema_ai
 
@@ -141,6 +142,20 @@ def tema_ai_endpoint(
                 status_code=500,
                 detail=f"Errore nel calcolo del tema natale: {e}",
             )
+
+        # ====================================================
+        # 1b) Costruzione payload VISIVO (tema_vis) dal CORE
+        # ====================================================
+        try:
+            tema_vis = build_tema_vis_payload(tema)
+        except Exception as e:
+            logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Errore nella costruzione del payload visivo del tema: {e}",
+            )
+
+
 
         # ====================================================
         # 2) Build payload AI
@@ -280,6 +295,7 @@ def tema_ai_endpoint(
             "status": "ok",
             "scope": "tema_ai",
             "input": body.dict(),
+            "tema_vis": tema_vis,        # <<< NUOVO BLOCCO
             "payload_ai": payload_ai,
             "result": {
                 "error": "JSON non valido" if parsed is None else None,
