@@ -8,6 +8,7 @@ import logging
 
 from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.tema_vis_payload import build_tema_vis_payload
+from astrobot_core.grafici import grafico_tema_natal  # <<< SOLO AGGIUNTO
 from utils.payload_tema_ai import build_payload_tema_ai
 from ai_claude import call_claude_tema_ai
 
@@ -148,14 +149,34 @@ def tema_ai_endpoint(
         # ====================================================
         try:
             tema_vis = build_tema_vis_payload(tema)
+
+            # 🔹 NUOVO: rigeneriamo il PNG usando anche gli aspetti natali
+            try:
+                pianeti_decod = tema.get("pianeti_decod") or {}
+                asc_mc_case = tema.get("asc_mc_case") or {}
+                aspetti = tema.get("natal_aspects") or []
+
+                chart_png_base64 = grafico_tema_natal(
+                    pianeti_decod=pianeti_decod,
+                    asc_mc_case=asc_mc_case,
+                    aspetti=aspetti,
+                )
+
+                # sovrascriviamo/integriamo nel blocco tema_vis esistente
+                tema_vis["chart_png_base64"] = chart_png_base64
+                tema_vis["aspetti"] = aspetti
+            except Exception as ge:
+                logger.exception(
+                    "[TEMA_AI] Errore nella generazione del grafico tema con aspetti: %r",
+                    ge,
+                )
+
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
             raise HTTPException(
                 status_code=500,
                 detail=f"Errore nella costruzione del payload visivo del tema: {e}",
             )
-
-
 
         # ====================================================
         # 2) Build payload AI
@@ -295,7 +316,7 @@ def tema_ai_endpoint(
             "status": "ok",
             "scope": "tema_ai",
             "input": body.dict(),
-            "tema_vis": tema_vis,        # <<< NUOVO BLOCCO
+            "tema_vis": tema_vis,        # <<< BLOCCO VISIVO
             "payload_ai": payload_ai,
             "result": {
                 "error": "JSON non valido" if parsed is None else None,
@@ -397,4 +418,3 @@ def tema_ai_endpoint(
             )
         # rilanciamo comunque, FastAPI risponderà con 500
         raise
-
