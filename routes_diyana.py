@@ -2,13 +2,13 @@
 
 from fastapi import APIRouter, HTTPException
 
-from astrobot_core.ai_diyana_qa import (
+from ai_diyana_qa import (
     QaAnswerRequest,
     QaAnswerResponse,
     process_diyana_qa,
 )
 
-from astrobot_core.diyana_wallet import (
+from diyana_wallet import (
     PurchaseExtraRequest,
     PurchaseExtraResponse,
     get_balance,
