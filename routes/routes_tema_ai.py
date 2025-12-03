@@ -8,8 +8,8 @@ import logging
 
 from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.tema_vis_payload import build_tema_vis_payload
-from astrobot_core.grafici import grafico_tema_natal  # <<< SOLO AGGIUNTO
-from utils.payload_tema_ai import build_payload_tema_ai
+from astrobot_core.grafici import grafico_tema_natal
+from astrobot_core.payload_tema_ai import build_payload_tema_ai, build_tema_vis
 from ai_claude import call_claude_tema_ai
 
 # --- IMPORT PER AUTH + CREDITI ---
@@ -22,6 +22,7 @@ from astrobot_auth.credits_logic import (
     log_usage_event,
     PremiumDecision,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,11 @@ def tema_ai_endpoint(
     """
     0) Gating crediti SOLO se tier == "premium"
     1) Calcolo tema natale
-    2) Build payload_ai
-    3) Chiamata Claude
-    4) Logging usage
-    5) Risposta finale con blocco billing
+    2) Build payload_vis (PNG + liste testuali) dal CORE
+    3) Build payload_ai
+    4) Chiamata Claude
+    5) Logging usage
+    6) Risposta finale con blocco billing
     """
 
     # ==============================
@@ -145,12 +147,13 @@ def tema_ai_endpoint(
             )
 
         # ====================================================
-        # 1b) Costruzione payload VISIVO (tema_vis) dal CORE
+        # 1b) Costruzione payload VISIVO (tema_vis)
         # ====================================================
         try:
+            # base esistente dal CORE (se già avevi qualcosa)
             tema_vis = build_tema_vis_payload(tema)
 
-            # 🔹 NUOVO: rigeneriamo il PNG usando anche gli aspetti natali
+            # --- PNG ruota-only con aspetti ---
             try:
                 pianeti_decod = tema.get("pianeti_decod") or {}
                 asc_mc_case = tema.get("asc_mc_case") or {}
@@ -162,13 +165,28 @@ def tema_ai_endpoint(
                     aspetti=aspetti,
                 )
 
-                # sovrascriviamo/integriamo nel blocco tema_vis esistente
                 tema_vis["chart_png_base64"] = chart_png_base64
-                tema_vis["aspetti"] = aspetti
             except Exception as ge:
                 logger.exception(
                     "[TEMA_AI] Errore nella generazione del grafico tema con aspetti: %r",
                     ge,
+                )
+
+            # --- NUOVO: payload testuale pianeti + aspetti ---
+            try:
+                # build_tema_vis l'hai inserita in payload_tema_ai:
+                # assumiamo che accetti `tema` e ritorni un dict con chiavi "pianeti" e "aspetti"
+                tema_vis_text = build_tema_vis(tema)
+
+                if isinstance(tema_vis_text, dict):
+                    if "pianeti" in tema_vis_text:
+                        tema_vis["pianeti"] = tema_vis_text["pianeti"]
+                    if "aspetti" in tema_vis_text:
+                        tema_vis["aspetti"] = tema_vis_text["aspetti"]
+            except Exception as te:
+                logger.exception(
+                    "[TEMA_AI] Errore nella costruzione del payload testuale tema_vis: %r",
+                    te,
                 )
 
         except Exception as e:
@@ -241,7 +259,6 @@ def tema_ai_endpoint(
             elif decision.mode == "free_credit":
                 cost_free_credits = TEMA_AI_PREMIUM_COST
 
-        # request_json arricchito con body + info di navigazione
         request_log_success = {
             **request_log_base,
             "ai_call": {
@@ -250,7 +267,6 @@ def tema_ai_endpoint(
             },
         }
 
-        # Logghiamo SEMPRE (successo)
         try:
             log_usage_event(
                 user_id=user.sub,
@@ -272,7 +288,6 @@ def tema_ai_endpoint(
                 request_json=request_log_success,
             )
         except Exception as e:
-            # Non blocchiamo la risposta se il logging fallisce
             logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
 
         # ====================================================
@@ -316,7 +331,7 @@ def tema_ai_endpoint(
             "status": "ok",
             "scope": "tema_ai",
             "input": body.dict(),
-            "tema_vis": tema_vis,        # <<< BLOCCO VISIVO
+            "tema_vis": tema_vis,        # 👈 PNG + pianeti/aspetti testuali
             "payload_ai": payload_ai,
             "result": {
                 "error": "JSON non valido" if parsed is None else None,
@@ -342,7 +357,6 @@ def tema_ai_endpoint(
     # 7) LOG TENTATIVI FALLITI
     # ====================================================
     except HTTPException as exc:
-        # errori "controllati" (402, 500 custom, ecc.)
         try:
             log_usage_event(
                 user_id=user.sub,
@@ -377,11 +391,9 @@ def tema_ai_endpoint(
                 "[TEMA_AI] log_usage_event error (HTTPException): %r",
                 log_err,
             )
-        # rilanciamo l'errore originale
         raise
 
     except Exception as exc:
-        # errori inattesi (non HTTPException)
         logger.exception("[TEMA_AI] Errore inatteso in tema_ai_endpoint")
         try:
             log_usage_event(
@@ -416,5 +428,4 @@ def tema_ai_endpoint(
                 "[TEMA_AI] log_usage_event error (unexpected): %r",
                 log_err,
             )
-        # rilanciamo comunque, FastAPI risponderà con 500
         raise
