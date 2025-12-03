@@ -8,8 +8,8 @@ import logging
 
 from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.tema_vis_payload import build_tema_vis_payload
-from astrobot_core.grafici import grafico_tema_natal
-from astrobot_core.payload_tema_ai import build_payload_tema_ai, build_tema_vis
+from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
+from astrobot_core.payload_tema_ai import build_payload_tema_ai
 from ai_claude import call_claude_tema_ai
 
 # --- IMPORT PER AUTH + CREDITI ---
@@ -147,24 +147,24 @@ def tema_ai_endpoint(
             )
 
         # ====================================================
-        # 1b) Costruzione payload VISIVO (tema_vis)
+        # 1b) Costruzione payload VISIVO (tema_vis) dal CORE
         # ====================================================
         try:
-            # base esistente dal CORE (se già avevi qualcosa)
+            # payload di base (meta, ecc.)
             tema_vis = build_tema_vis_payload(tema)
 
-            # --- PNG ruota-only con aspetti ---
-            try:
-                pianeti_decod = tema.get("pianeti_decod") or {}
-                asc_mc_case = tema.get("asc_mc_case") or {}
-                aspetti = tema.get("natal_aspects") or []
+            # 🔹 PIANETI / CASE / ASPETTI natali
+            pianeti_decod = tema.get("pianeti_decod") or {}
+            asc_mc_case = tema.get("asc_mc_case") or {}
+            aspetti = tema.get("natal_aspects") or []
 
+            # 🔹 PNG ruota-only (usa anche gli aspetti per disegno interno)
+            try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
                     asc_mc_case=asc_mc_case,
                     aspetti=aspetti,
                 )
-
                 tema_vis["chart_png_base64"] = chart_png_base64
             except Exception as ge:
                 logger.exception(
@@ -172,17 +172,15 @@ def tema_ai_endpoint(
                     ge,
                 )
 
-            # --- NUOVO: payload testuale pianeti + aspetti ---
+            # 🔹 Payload testuale per frontend (Pianeti + Aspetti)
             try:
-                # build_tema_vis l'hai inserita in payload_tema_ai:
-                # assumiamo che accetti `tema` e ritorni un dict con chiavi "pianeti" e "aspetti"
-                tema_vis_text = build_tema_vis(tema)
-
-                if isinstance(tema_vis_text, dict):
-                    if "pianeti" in tema_vis_text:
-                        tema_vis["pianeti"] = tema_vis_text["pianeti"]
-                    if "aspetti" in tema_vis_text:
-                        tema_vis["aspetti"] = tema_vis_text["aspetti"]
+                text_payload = build_tema_text_payload(
+                    pianeti_decod=pianeti_decod,
+                    asc_mc_case=asc_mc_case,
+                    aspetti=aspetti,
+                )
+                tema_vis["pianeti"] = text_payload.get("pianeti", [])
+                tema_vis["aspetti"] = text_payload.get("aspetti", [])
             except Exception as te:
                 logger.exception(
                     "[TEMA_AI] Errore nella costruzione del payload testuale tema_vis: %r",
