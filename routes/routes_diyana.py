@@ -28,69 +28,106 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
     """
-    Inserisce un record in dyana_qas su Supabase con:
-    - dati utente/reading
-    - domanda
-    - risposta AI
-    - meta (token, modello, tags)
+    Logga una domanda/risposta di DYANA nella tabella Supabase dyana_qas.
+
+    Non deve MAI bloccare la risposta all'utente:
+    - se mancano le env → warning e return
+    - se Supabase risponde con errore → error log e return
+    - qualsiasi altra eccezione → exception log e return
     """
+
+    # 1) Env check
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        logger.warning("[DYANA-LOG] SUPABASE_URL o SERVICE_ROLE_KEY mancanti, salto il log.")
+        logger.warning(
+            "[DYANA-LOG] SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY mancanti, skip log dyana_qas"
+        );
         return
 
-    url = SUPABASE_URL.rstrip("/") + "/rest/v1/dyana_qas"
-
-    # resp.meta è un oggetto Pydantic (QaAnswerMeta), NON un dict
-    meta_obj = getattr(resp, "meta", None)
-
-    tokens_in = getattr(meta_obj, "tokens_in", None) if meta_obj else None
-    tokens_out = getattr(meta_obj, "tokens_out", None) if meta_obj else None
-    model = getattr(meta_obj, "model", None) if meta_obj else None
-    kb_docs_used = getattr(meta_obj, "kb_docs_used", None) if meta_obj else None
-    reading_tags = getattr(meta_obj, "reading_tags", None) if meta_obj else None
-    question_tags = getattr(meta_obj, "question_tags", None) if meta_obj else None
-
-    payload = {
-        "user_id": req.user_id,
-        "session_id": req.session_id,
-        "reading_id": req.reading.reading_id,
-        "reading_type": req.reading.reading_type,
-        "reading_label": req.reading.reading_label,
-        "question": req.user_question,
-        "ai_answer": resp.ai_answer,
-        "origin": req.question_origin,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "model": model,
-        "kb_docs_used": kb_docs_used,
-        "reading_tags": reading_tags,
-        "question_tags": question_tags,
-    }
-
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-
     try:
+        # 2) Estraiamo campi principali dalla request
+        user_id = getattr(req, "user_id", None)
+        session_id = getattr(req, "session_id", None)
+        question_origin = getattr(req, "question_origin", None)  # es: "included" / "extra"
+
+        reading = getattr(req, "reading", None)
+        if reading is not None:
+            reading_id = getattr(reading, "reading_id", None)
+            reading_type = getattr(reading, "reading_type", None)
+            reading_label = getattr(reading, "reading_label", None)
+            reading_text = getattr(reading, "reading_text", None)
+            kb_tags = getattr(reading, "kb_tags", None)
+        else:
+            reading_id = None
+            reading_type = None
+            reading_label = None
+            reading_text = None
+            kb_tags = None
+
+        user_question = getattr(req, "user_question", None)
+
+        # 3) Estraiamo meta dalla response (tok_in, tok_out, model, tags, ecc.)
+        meta_obj = getattr(resp, "meta", None)
+
+        tokens_in = getattr(meta_obj, "tokens_in", None) if meta_obj else None
+        tokens_out = getattr(meta_obj, "tokens_out", None) if meta_obj else None
+        model = getattr(meta_obj, "model", None) if meta_obj else None
+        reading_tags = getattr(meta_obj, "reading_tags", None) if meta_obj else None
+        question_tags = getattr(meta_obj, "question_tags", None) if meta_obj else None
+
+        ai_answer = getattr(resp, "ai_answer", None)
+        status = getattr(resp, "status", None)
+        error = getattr(resp, "error", None)
+
+        # 4) Costruiamo il payload per la tabella dyana_qas
+        payload = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "reading_id": reading_id,
+            "reading_type": reading_type,
+            "reading_label": reading_label,
+            "reading_text": reading_text,
+            "kb_tags": kb_tags,
+            "user_question": user_question,
+            "ai_answer": ai_answer,
+            "status": status,
+            "question_origin": question_origin,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "model": model,
+            "reading_tags": reading_tags,
+            "question_tags": question_tags,
+            "error": error,
+        }
+
+        # 5) Chiamata a Supabase
+        url = SUPABASE_URL.rstrip("/") + "/rest/v1/dyana_qas"
+        headers = {
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+
         r = httpx.post(url, json=payload, headers=headers, timeout=5.0)
-        if r.status_code not in (200, 201, 204):
-            logger.warning(
-                "[DYANA-LOG] Insert dyana_qas KO status=%s body=%s",
+
+        if r.status_code not in (200, 201):
+            logger.error(
+                "[DYANA-LOG] Insert dyana_qas FAILED status=%s body=%s payload=%s",
                 r.status_code,
                 r.text,
+                payload,
             )
-        else:
-            logger.info(
-                "[DYANA-LOG] Insert dyana_qas OK user_id=%s reading_id=%s origin=%s",
-                req.user_id,
-                req.reading.reading_id,
-                req.question_origin,
-            )
+            return
+
+        logger.info(
+            "[DYANA-LOG] Insert dyana_qas OK user_id=%s reading_id=%s origin=%s",
+            user_id,
+            reading_id,
+            question_origin,
+        )
+
     except Exception as e:
-        logger.exception("[DYANA-LOG] Errore inserendo log dyana_qas: %s", e)
+        logger.exception("[DYANA-LOG] Errore inatteso in log_diyana_qa_event: %s", e)
 
 @router.post("/qa_answer", response_model=QaAnswerResponse)
 async def diyana_qa_answer(req: QaAnswerRequest):
