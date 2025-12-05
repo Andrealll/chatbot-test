@@ -87,7 +87,9 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
             "reading_label": reading_label,
             "reading_text": reading_text,
             "kb_tags": kb_tags,
+            # 🔹 doppio mapping per compatibilità con lo schema esistente
             "user_question": user_question,
+            "question": user_question,
             "ai_answer": ai_answer,
             "status": status,
             "question_origin": question_origin,
@@ -97,6 +99,7 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
             "reading_tags": reading_tags,
             "question_tags": question_tags,
         }
+
 
         # 5) Chiamata a Supabase
         url = SUPABASE_URL.rstrip("/") + "/rest/v1/dyana_qas"
