@@ -7,6 +7,8 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 
+
+
 from astrobot_core.sinastria import sinastria as calcola_sinastria
 from astrobot_core.ai_sinastria_claude import call_claude_sinastria_ai
 
@@ -255,6 +257,54 @@ async def sinastria_ai_endpoint(
             logger.exception("[SINASTRIA_AI] log_usage_event error (success): %r", e)
 
         # ====================================================
+        # 3c) Grafico sinastria (PNG base64) – opzionale
+        # ====================================================
+        chart_sinastria_base64 = None
+        try:
+            from astrobot_core.grafici import genera_carta_sinastria
+
+            # 1) Pianeti decodificati per A e B
+            pianeti_A_decod = sinastria_data["A"]["pianeti_decod"]
+            pianeti_B_decod = sinastria_data["B"]["pianeti_decod"]
+
+            # 2) Aspetti cross A–B dalla struttura:
+            #    "sinastria": { "aspetti_AB": [...] }
+            aspetti_raw = sinastria_data.get("sinastria", {}).get("aspetti_AB", [])
+
+            # Adattamento chiavi: da pianeta1/pianeta2 -> pianetaA/pianetaB
+            aspetti_AB = []
+            for asp in aspetti_raw:
+                aspetti_AB.append(
+                    {
+                        "pianetaA": asp.get("pianeta1"),
+                        "pianetaB": asp.get("pianeta2"),
+                        "tipo": asp.get("tipo"),
+                        "orb": asp.get("orb", asp.get("delta")),
+                        "delta": asp.get("delta"),
+                    }
+                )
+
+            chart_sinastria_base64 = genera_carta_sinastria(
+                pianeti_A_decod=pianeti_A_decod,
+                pianeti_B_decod=pianeti_B_decod,
+                aspetti_AB=aspetti_AB,
+                nome_A=body.A.nome or "A",
+                nome_B=body.B.nome or "B",
+            )
+
+        except KeyError as e:
+            logger.warning(
+                "[SINASTRIA_AI] Chiavi mancanti per il grafico di sinastria: %r",
+                e,
+            )
+            chart_sinastria_base64 = None
+        except Exception:
+            logger.exception(
+                "[SINASTRIA_AI] Errore nella generazione del grafico di sinastria"
+            )
+            chart_sinastria_base64 = None
+
+        # ====================================================
         # 4) Risposta finale
         # ====================================================
         return {
@@ -263,6 +313,7 @@ async def sinastria_ai_endpoint(
             "input": body.dict(),
             "payload_ai": payload_ai,
             "sinastria_ai": sinastria_ai,
+            "chart_sinastria_base64": chart_sinastria_base64,
             "billing": {
                 "mode": billing_mode,                 # "free", "paid" o "free_credit"
                 "remaining_credits": (
