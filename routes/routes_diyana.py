@@ -96,7 +96,6 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
             "model": model,
             "reading_tags": reading_tags,
             "question_tags": question_tags,
-            "error": error,
         }
 
         # 5) Chiamata a Supabase
