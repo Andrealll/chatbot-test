@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field, validator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import calendar
-import time
 
 from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
 from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
@@ -83,12 +82,14 @@ class OroscopoAIRequest(BaseModel):
             raise ValueError("ora deve contenere solo numeri (HH:MM)")
         return v
 
+
 class OroscopoBaseInput(OroscopoAIRequest):
     """
     Alias retrocompatibile per i helper interni.
     Stesse fields di OroscopoAIRequest.
     """
     pass
+
 
 class OroscopoResponse(BaseModel):
     status: Literal["ok", "error"]
@@ -122,7 +123,7 @@ def _normalize_period(periodo: str) -> Periodo:
     if p not in mapping:
         raise HTTPException(
             status_code=400,
-            detail=f"Periodo non valido: '{periodo}'. Usa uno tra: daily, weekly, monthly, yearly."
+            detail=f"Periodo non valido: '{periodo}'. Usa uno tra: daily, weekly, monthly, yearly.",
         )
     return mapping[p]  # type: ignore[return-value]
 
@@ -157,7 +158,6 @@ def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
         return datetime.combine(today, datetime.min.time())
 
 
-
 def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Copia della logica del test:
@@ -183,9 +183,21 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
         if tier == "premium":
             domani = start_dt + timedelta(days=1)
             out = [
-                {"id": "mattina", "label": "Mattina", "datetime": start_dt.replace(hour=9).isoformat()},
-                {"id": "pomeriggio", "label": "Pomeriggio", "datetime": start_dt.replace(hour=15).isoformat()},
-                {"id": "domani", "label": "Domani", "datetime": domani.isoformat()},
+                {
+                    "id": "mattina",
+                    "label": "Mattina",
+                    "datetime": start_dt.replace(hour=9).isoformat(),
+                },
+                {
+                    "id": "pomeriggio",
+                    "label": "Pomeriggio",
+                    "datetime": start_dt.replace(hour=15).isoformat(),
+                },
+                {
+                    "id": "domani",
+                    "label": "Domani",
+                    "datetime": domani.isoformat(),
+                },
             ]
         return out
 
@@ -277,10 +289,26 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
         if tier == "premium":
             year = start_dt.year
             out = [
-                {"id": "inverno",   "label": "Inverno",   "range": {"start": f"{year}-01-01", "end": f"{year}-03-20"}},
-                {"id": "primavera", "label": "Primavera", "range": {"start": f"{year}-03-21", "end": f"{year}-06-20"}},
-                {"id": "estate",    "label": "Estate",    "range": {"start": f"{year}-06-21", "end": f"{year}-09-22"}},
-                {"id": "autunno",   "label": "Autunno",   "range": {"start": f"{year}-09-23", "end": f"{year}-12-31"}},
+                {
+                    "id": "inverno",
+                    "label": "Inverno",
+                    "range": {"start": f"{year}-01-01", "end": f"{year}-03-20"},
+                },
+                {
+                    "id": "primavera",
+                    "label": "Primavera",
+                    "range": {"start": f"{year}-03-21", "end": f"{year}-06-20"},
+                },
+                {
+                    "id": "estate",
+                    "label": "Estate",
+                    "range": {"start": f"{year}-06-21", "end": f"{year}-09-22"},
+                },
+                {
+                    "id": "autunno",
+                    "label": "Autunno",
+                    "range": {"start": f"{year}-09-23", "end": f"{year}-12-31"},
+                },
             ]
         return out
 
@@ -295,7 +323,9 @@ def _aggregate_bucket(label: str, samples: List[Dict[str, Any]]) -> Optional[Dic
     dts: List[datetime] = []
     for s in samples:
         dt_raw = s.get("datetime")
-        dts.append(_safe_iso_to_dt(dt_raw if isinstance(dt_raw, str) else None, today=today))
+        dts.append(
+            _safe_iso_to_dt(dt_raw if isinstance(dt_raw, str) else None, today=today)
+        )
 
     ts_avg = sum(dt.timestamp() for dt in dts) / len(dts)
     dt_mid = datetime.fromtimestamp(ts_avg)
@@ -353,7 +383,10 @@ def _aggregate_annual_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     year = _safe_iso_to_dt(samples[0].get("datetime"), today=today).year
 
     def _dt(d: date) -> datetime:
-        return datetime.combine(d, datetime.min.time()).replace(hour=12)
+        return (
+            datetime.combine(d, datetime.min.time())
+            .replace(hour=12)
+        )
 
     spring = _dt(date(year, 3, 21))
     summer = _dt(date(year, 6, 21))
@@ -400,7 +433,7 @@ def _aggregate_monthly_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     today = date.today()
     dt0 = _safe_iso_to_dt(samples[0].get("datetime"), today=today)
     year, month = dt0.year, dt0.month
-    _, last_day = calendar.monthrange(year, month)  # non usato direttamente, ma coerente
+    _ = calendar.monthrange(year, month)
 
     buckets = {
         "prima_decade": [],
@@ -437,7 +470,9 @@ def _aggregate_weekly_samples(samples: List[Dict[str, Any]], tier: str) -> Dict[
     if not samples:
         return {"samples": []}
 
-    samples_sorted = sorted(samples, key=lambda s: _safe_iso_to_dt(s.get("datetime")))
+    samples_sorted = sorted(
+        samples, key=lambda s: _safe_iso_to_dt(s.get("datetime"))
+    )
     n = len(samples_sorted)
 
     tier_norm = (tier or "").lower()
@@ -463,7 +498,10 @@ def _aggregate_weekly_samples(samples: List[Dict[str, Any]], tier: str) -> Dict[
     return {"samples": out_samples}
 
 
-def _aggregate_metriche_for_period(metriche_grafico: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+def _aggregate_metriche_for_period(
+    metriche_grafico: Dict[str, Any],
+    persona: Persona,
+) -> Dict[str, Any]:
     if not metriche_grafico:
         return metriche_grafico
 
@@ -487,7 +525,9 @@ def _aggregate_metriche_for_period(metriche_grafico: Dict[str, Any], persona: Pe
 def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
     # 1) Vecchio stile
     po = pipe.get("periodo_output")
-    if isinstance(po, dict) and ("date_range" in po or "aspetti_rilevanti" in po):
+    if isinstance(po, dict) and (
+        "date_range" in po or "aspetti_rilevanti" in po
+    ):
         return po
 
     # 2) Strutture periodi / periodi_multi
@@ -504,7 +544,11 @@ def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]
     def _search(d: Any) -> Optional[Dict[str, Any]]:
         if isinstance(d, dict):
             keys = set(d.keys())
-            if "date_range" in keys or "aspetti_rilevanti" in keys or "metriche_grafico" in keys:
+            if (
+                "date_range" in keys
+                or "aspetti_rilevanti" in keys
+                or "metriche_grafico" in keys
+            ):
                 return d
             for v in d.values():
                 found = _search(v)
@@ -521,7 +565,10 @@ def _pick_period_block(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]
     return found or {}
 
 
-def _cleanup_period_block_for_ai(period_block: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+def _cleanup_period_block_for_ai(
+    period_block: Dict[str, Any],
+    persona: Persona,
+) -> Dict[str, Any]:
     periodo = persona.periodo.lower()
     cleaned = dict(period_block)
 
@@ -629,7 +676,10 @@ def build_debug_kb_hooks(
     }
 
 
-def build_oroscopo_struct_from_pipe(pipe: Dict[str, Any], persona: Persona) -> Dict[str, Any]:
+def build_oroscopo_struct_from_pipe(
+    pipe: Dict[str, Any],
+    persona: Persona,
+) -> Dict[str, Any]:
     tema = pipe.get("tema_natale") or {}
     profilo_natale = pipe.get("profilo_natale") or {}
 
@@ -672,7 +722,7 @@ def build_oroscopo_struct_from_pipe(pipe: Dict[str, Any], persona: Persona) -> D
         "profilo_natale": profilo_natale,
         "kb_hooks": kb_hooks,
         "periodi": {
-            persona.periodo: period_block
+            persona.periodo: period_block,
         },
     }
 
@@ -693,12 +743,17 @@ def _build_payload_ai(
     """
     logger.info(
         "[OROSCOPO][PAYLOAD_AI] scope=%s tier=%s nome=%s",
-        scope, tier, data_input.nome
+        scope,
+        tier,
+        data_input.nome,
     )
 
     pipe = engine_result.get("pipe") or {}
     if not pipe:
-        raise RuntimeError("engine_result.pipe mancante: assicurati che _run_oroscopo_engine_new sia stato chiamato correttamente.")
+        raise RuntimeError(
+            "engine_result.pipe mancante: assicurati che "
+            "_run_oroscopo_engine_new sia stato chiamato correttamente."
+        )
 
     periodo_ita = PERIODO_EN_TO_IT[scope]
     persona = Persona(
@@ -710,13 +765,13 @@ def _build_payload_ai(
         tier=tier,
     )
 
-    # 1) oroscopo_struct dalla pipe (stessa logica del test)
+    # 1) oroscopo_struct dalla pipe
     oroscopo_struct = build_oroscopo_struct_from_pipe(pipe, persona)
 
     # 2) period_code in stile "daily"/"weekly"/...
     period_code = PERIODO_IT_TO_CODE.get(periodo_ita, scope)
 
-    # 3) payload AI usando il modulo ufficiale (prompt incluso lì)
+    # 3) payload AI usando il modulo ufficiale
     payload_ai = build_oroscopo_payload_ai(
         oroscopo_struct=oroscopo_struct,
         lang="it",
@@ -742,11 +797,15 @@ def _run_oroscopo_engine_new(
     Wrapper per il motore numerico multi-snapshot di AstroBot.
     Usa run_oroscopo_multi_snapshot da astrobot_core.
     """
-    periodo_ita = PERIODO_EN_TO_IT[scope]  # es. "daily" -> "giornaliero"
+    periodo_ita = PERIODO_EN_TO_IT[scope]
 
     logger.info(
         "[OROSCOPO][ENGINE_NEW] scope=%s (ita=%s) tier=%s citta=%s data=%s",
-        scope, periodo_ita, tier, data_input.citta, data_input.data
+        scope,
+        periodo_ita,
+        tier,
+        data_input.citta,
+        data_input.data,
     )
 
     pipe = run_oroscopo_multi_snapshot(
@@ -766,6 +825,7 @@ def _run_oroscopo_engine_new(
         "pipe": pipe,
     }
 
+
 def _run_oroscopo_engine(
     scope: Periodo,
     tier: Tier,
@@ -780,6 +840,7 @@ def _run_oroscopo_engine(
         tier=tier,
         data_input=data_input,
     )
+
 
 # =============================
 # ROUTE PRINCIPALE
@@ -796,12 +857,11 @@ async def oroscopo_ai_endpoint(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ) -> OroscopoResponse:
-
     """
     Oroscopo AI con:
     - normalizzazione periodo (daily/weekly/monthly/yearly)
-    - gating crediti stile tema_ai (load_state -> decide -> apply -> save)
-    - logging esteso in usage_logs (tokens, modello, billing, request_json)
+    - gating crediti stile tema_ai
+    - logging in usage_logs (tokens, billing, request_json)
     - billing per periodo con costi diversi (OROSCOPO_FEATURE_COSTS)
     """
 
@@ -813,7 +873,11 @@ async def oroscopo_ai_endpoint(
 
     logger.info(
         "[OROSCOPO_AI] scope=%s tier=%s citta=%s data=%s nome=%s",
-        scope, tier, payload.citta, payload.data, payload.nome
+        scope,
+        tier,
+        payload.citta,
+        payload.data,
+        payload.nome,
     )
 
     engine: Engine = "ai"
@@ -831,7 +895,7 @@ async def oroscopo_ai_endpoint(
         "tier": tier,
     }
 
-    # Variabili di stato per logging (successo + errore)
+    # Variabili di stato per logging
     state = None
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
@@ -858,7 +922,10 @@ async def oroscopo_ai_endpoint(
             if feature_cost <= 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Costo oroscopo premium non configurato per periodo '{scope}'.",
+                    detail=(
+                        "Costo oroscopo premium non configurato "
+                        f"per periodo '{scope}'."
+                    ),
                 )
 
             decision = decide_premium_mode(state)
@@ -909,29 +976,32 @@ async def oroscopo_ai_endpoint(
         # ==============================
         oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
 
-        # --- usage tokens / modello / latency ---
+        # ==============================
+        # USAGE TOKENS / LATENCY da _ai_usage
+        # ==============================
         tokens_in = 0
         tokens_out = 0
         model = None
         latency_ms: Optional[float] = None
 
         try:
-            ai_debug_block = None
             if isinstance(oroscopo_ai, dict):
-                ai_debug_block = oroscopo_ai.get("ai_debug") or oroscopo_ai.get("debug")
+                ai_usage = oroscopo_ai.pop("_ai_usage", None)
+                if isinstance(ai_usage, dict):
+                    in_tok = ai_usage.get("input_tokens")
+                    out_tok = ai_usage.get("output_tokens")
+                    dur = ai_usage.get("duration_ms")
 
-            if isinstance(ai_debug_block, dict):
-                usage = ai_debug_block.get("usage") or {}
-                tokens_in = usage.get("input_tokens", 0) or 0
-                tokens_out = usage.get("output_tokens", 0) or 0
-
-                model = ai_debug_block.get("model")
-                elapsed_sec = ai_debug_block.get("elapsed_sec")
-                if isinstance(elapsed_sec, (int, float)):
-                    latency_ms = float(elapsed_sec) * 1000.0
+                    if isinstance(in_tok, (int, float)):
+                        tokens_in = int(in_tok)
+                    if isinstance(out_tok, (int, float)):
+                        tokens_out = int(out_tok)
+                    if isinstance(dur, (int, float)):
+                        latency_ms = float(dur)
         except Exception:
-            # se fallisce il parsing usage, non blocchiamo nulla
-            logger.exception("[OROSCOPO_AI] Errore lettura usage/model da ai_debug")
+            logger.exception(
+                "[OROSCOPO_AI] Errore lettura _ai_usage (input/output/duration_ms)"
+            )
 
         # ==============================
         # 4) BILLING CALCOLATO
@@ -990,7 +1060,9 @@ async def oroscopo_ai_endpoint(
                 request_json=request_log_success,
             )
         except Exception as e:
-            logger.exception("[OROSCOPO_AI] log_usage_event error (success): %r", e)
+            logger.exception(
+                "[OROSCOPO_AI] log_usage_event error (success): %r", e
+            )
 
         # ==============================
         # 6) RISPOSTA FINALE
@@ -1028,7 +1100,9 @@ async def oroscopo_ai_endpoint(
                 model=None,
                 latency_ms=None,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=(state.paid_credits if state is not None else None),
+                paid_credits_after=(
+                    state.paid_credits if state is not None else None
+                ),
                 free_credits_used_before=free_credits_used_before,
                 free_credits_used_after=(
                     state.free_tries_used if state is not None else None
@@ -1048,7 +1122,6 @@ async def oroscopo_ai_endpoint(
                 log_err,
             )
 
-        # Rilanciamo l'HTTPException originale
         raise
 
     # ==============================
@@ -1073,7 +1146,9 @@ async def oroscopo_ai_endpoint(
                 model=None,
                 latency_ms=None,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=(state.paid_credits if state is not None else None),
+                paid_credits_after=(
+                    state.paid_credits if state is not None else None
+                ),
                 free_credits_used_before=free_credits_used_before,
                 free_credits_used_after=(
                     state.free_tries_used if state is not None else None

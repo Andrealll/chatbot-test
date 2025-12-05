@@ -94,6 +94,8 @@ async def sinastria_ai_endpoint(
     paid_credits_after: Optional[int] = None
     free_credits_used_before: Optional[int] = None
     free_credits_used_after: Optional[int] = None
+    cost_paid_credits = 0
+    cost_free_credits = 0
 
     try:
         # ====================================================
@@ -193,19 +195,49 @@ async def sinastria_ai_endpoint(
 
         try:
             ai_debug_block = None
+
             if isinstance(sinastria_ai, dict):
-                ai_debug_block = (
-                    sinastria_ai.get("ai_debug")
-                    or sinastria_ai.get("debug")
-                )
+                # 1) Caso semplice: debug ai livello top
+                ai_debug_block = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
+
+                # 2) Caso: debug dentro meta (es. result["meta"]["ai_debug"])
+                if ai_debug_block is None:
+                    meta_block = sinastria_ai.get("meta")
+                    if isinstance(meta_block, dict):
+                        ai_debug_block = meta_block.get("ai_debug") or meta_block.get("debug")
+
+                # 3) Caso wrapper tipo {"result": {...}, "ai_debug": {...}}
+                if ai_debug_block is None:
+                    wrapper_debug = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
+                    if isinstance(wrapper_debug, dict):
+                        ai_debug_block = wrapper_debug
+
+                # 4) Caso wrapper tipo {"result": {...}, ...} con debug dentro result
+                if ai_debug_block is None:
+                    inner = sinastria_ai.get("result")
+                    if isinstance(inner, dict):
+                        ai_debug_block = inner.get("ai_debug") or inner.get("debug")
 
             if isinstance(ai_debug_block, dict):
                 usage = ai_debug_block.get("usage") or {}
-                tokens_in = usage.get("input_tokens", 0) or 0
-                tokens_out = usage.get("output_tokens", 0) or 0
+                # supporto sia a chiavi "input_tokens"/"output_tokens"
+                # sia a eventuali forme alternative
+                tokens_in = (
+                    usage.get("input_tokens")
+                    or usage.get("prompt_tokens")
+                    or 0
+                ) or 0
+                tokens_out = (
+                    usage.get("output_tokens")
+                    or usage.get("completion_tokens")
+                    or 0
+                ) or 0
 
                 model = ai_debug_block.get("model")
-                elapsed_sec = ai_debug_block.get("elapsed_sec")
+                elapsed_sec = (
+                    ai_debug_block.get("elapsed_sec")
+                    or ai_debug_block.get("latency_sec")
+                )
                 if isinstance(elapsed_sec, (int, float)):
                     latency_ms = float(elapsed_sec) * 1000.0
         except Exception:
@@ -213,48 +245,6 @@ async def sinastria_ai_endpoint(
             tokens_out = 0
             model = None
             latency_ms = None
-
-        # Calcolo costi per logging (paid vs free_credit)
-        cost_paid_credits = 0
-        cost_free_credits = 0
-
-        if body.tier == "premium" and decision is not None:
-            if decision.mode == "paid":
-                cost_paid_credits = SINASTRIA_PREMIUM_COST
-            elif decision.mode == "free_credit":
-                cost_free_credits = SINASTRIA_PREMIUM_COST
-
-        request_log_success = {
-            **request_log_base,
-            "ai_call": {
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-            },
-        }
-
-        # Logghiamo SEMPRE (successo)
-        try:
-            log_usage_event(
-                user_id=user.sub,
-                feature=SINASTRIA_FEATURE_KEY,
-                tier=body.tier,
-                role=role,
-                is_guest=is_guest,
-                billing_mode=billing_mode,
-                cost_paid_credits=cost_paid_credits,
-                cost_free_credits=cost_free_credits,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                model=model,
-                latency_ms=latency_ms,
-                paid_credits_before=paid_credits_before,
-                paid_credits_after=paid_credits_after,
-                free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=free_credits_used_after,
-                request_json=request_log_success,
-            )
-        except Exception as e:
-            logger.exception("[SINASTRIA_AI] log_usage_event error (success): %r", e)
 
         # ====================================================
         # 3c) Grafico sinastria (PNG base64) – opzionale
