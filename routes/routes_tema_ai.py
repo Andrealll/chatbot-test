@@ -10,7 +10,7 @@ from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.tema_vis_payload import build_tema_vis_payload
 from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
 from astrobot_core.payload_tema_ai import build_payload_tema_ai
-from ai_claude import call_claude_tema_ai
+from astrobot_core.ai_tema_claude import call_claude_tema_ai
 
 # --- IMPORT PER AUTH + CREDITI ---
 from auth import get_current_user, UserContext
