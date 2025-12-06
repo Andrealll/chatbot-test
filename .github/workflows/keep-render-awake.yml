@@ -1,0 +1,22 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    # ogni 5 minuti (cron in UTC)
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # per lanciarlo a mano se vuoi
+
+jobs:
+  ping_render:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping chatbot-test backend
+        run: |
+          echo "Ping chatbot-test..."
+          curl -m 20 -s -o /dev/null -w "%{http_code}\n" "https://chatbot-test-0h4o.onrender.com/" || true
+
+      - name: Ping astrobot-auth-pub service
+        run: |
+          echo "Ping astrobot-auth-pub..."
+          curl -m 20 -s -o /dev/null -w "%{http_code}\n" "https://astrobot-auth-pub.onrender.com/" || true
