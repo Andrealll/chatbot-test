@@ -21,10 +21,51 @@ from diyana_wallet import (
     WalletInfo,
     ErrorPayload,
 )
-logger = logging.getLogger(__name__)
+
+# 🔧 USA LO STESSO LOGGER CHE GIÀ VEDI NEI LOG DI CREDITS
+# Logger dedicato a DYANA (indipendente da uvicorn)
+logger = logging.getLogger("diyana")
+
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter(
+        "DYANA | %(levelname)s | %(asctime)s | %(message)s"
+    )
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
+
+# Forziamo livello INFO per questo logger
+logger.setLevel(logging.INFO)
+
+
 router = APIRouter(prefix="/diyana", tags=["diyana"])
+
+# ============================================================================
+# ENV SUPABASE
+# ============================================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+
+def _build_supabase_rest_url() -> str:
+    """
+    Costruisce in modo robusto la base REST di Supabase.
+
+    - Se SUPABASE_URL = "https://xxx.supabase.co"     → "https://xxx.supabase.co/rest/v1"
+    - Se SUPABASE_URL = "https://xxx.supabase.co/rest/v1"
+        → resta invariata (evitiamo il doppio /rest/v1)
+    """
+    if not SUPABASE_URL:
+        return ""
+
+    base = SUPABASE_URL.rstrip("/")
+    if not base.endswith("/rest/v1"):
+        base = base + "/rest/v1"
+    return base
+
+
+SUPABASE_REST_BASE = _build_supabase_rest_url()
+
 
 def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
     """
@@ -37,10 +78,12 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
     """
 
     # 1) Env check
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    if not SUPABASE_REST_BASE or not SUPABASE_SERVICE_ROLE_KEY:
         logger.warning(
-            "[DYANA-LOG] SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY mancanti, skip log dyana_qas"
-        );
+            "[DYANA-LOG] SUPABASE_REST_BASE o SUPABASE_SERVICE_ROLE_KEY mancanti, "
+            "skip log dyana_qas (SUPABASE_URL=%r)",
+            SUPABASE_URL,
+        )
         return
 
     try:
@@ -87,7 +130,7 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
             "reading_label": reading_label,
             "reading_text": reading_text,
             "kb_tags": kb_tags,
-            # 🔹 doppio mapping per compatibilità con lo schema esistente
+            # doppio mapping per compatibilità con lo schema esistente
             "user_question": user_question,
             "question": user_question,
             "ai_answer": ai_answer,
@@ -98,19 +141,30 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
             "model": model,
             "reading_tags": reading_tags,
             "question_tags": question_tags,
+            "error": error,
         }
 
+        url = SUPABASE_REST_BASE + "/dyana_qas"
 
-        # 5) Chiamata a Supabase
-        url = SUPABASE_URL.rstrip("/") + "/rest/v1/dyana_qas"
-        headers = {
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        }
+        logger.info(
+            "[DYANA-LOG] Tentativo insert dyana_qas user_id=%s reading_id=%s origin=%s url=%s",
+            user_id,
+            reading_id,
+            question_origin,
+            url,
+        )
 
-        r = httpx.post(url, json=payload, headers=headers, timeout=5.0)
+        r = httpx.post(
+            url,
+            json=payload,
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            timeout=5.0,
+        )
 
         if r.status_code not in (200, 201):
             logger.error(
@@ -131,8 +185,17 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
     except Exception as e:
         logger.exception("[DYANA-LOG] Errore inatteso in log_diyana_qa_event: %s", e)
 
+
 @router.post("/qa_answer", response_model=QaAnswerResponse)
 async def diyana_qa_answer(req: QaAnswerRequest):
+    # 🔍 LOG DI INGRESSO ALLA ROUTE
+    logger.info(
+        "[DYANA-LOG] /diyana/qa_answer CALLED user_id=%s reading_id=%s origin=%s",
+        getattr(req, "user_id", None),
+        getattr(getattr(req, "reading", None), "reading_id", None),
+        getattr(req, "question_origin", None),
+    )
+
     if not req.reading.reading_text:
         raise HTTPException(
             status_code=400,
@@ -162,7 +225,6 @@ async def diyana_qa_answer(req: QaAnswerRequest):
 
     # 3) restituiamo comunque la risposta all'utente
     return resp
-
 
 
 # =============== NUOVA ROUTE: domanda extra ===============

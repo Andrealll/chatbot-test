@@ -2,17 +2,16 @@
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional, List, Literal
+
 import json
 import logging
 
 from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.tema_vis_payload import build_tema_vis_payload
-from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
-from astrobot_core.payload_tema_ai import build_payload_tema_ai
-from astrobot_core.ai_tema_claude import call_claude_tema_ai
+from astrobot_core.grafici import grafico_tema_natal
+from astrobot_core.payload_tema_ai import build_payload_tema_ai, build_tema_vis
 
-# --- IMPORT PER AUTH + CREDITI ---
 from auth import get_current_user, UserContext
 from astrobot_auth.credits_logic import (
     load_user_credits_state,
@@ -23,33 +22,30 @@ from astrobot_auth.credits_logic import (
     PremiumDecision,
 )
 
-
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
-# ==========================
-#  Costi in crediti (parametrici)
-# ==========================
+# Costi in crediti
 TEMA_AI_FEATURE_KEY = "tema_ai"
-TEMA_AI_PREMIUM_COST = 2  # se domani vuoi 3/5 ecc, cambi solo qui
+TEMA_AI_PREMIUM_COST = 2
 
 
 # ==========================
-#  Request model
+# Request model ALLINEATO AL FRONTEND
 # ==========================
 class TemaAIRequest(BaseModel):
     citta: str
-    data: str        # formato YYYY-MM-DD
-    ora: str         # formato HH:MM
+    data: str                 # "YYYY-MM-DD"
+    ora: Optional[str] = None # "HH:MM" oppure None
     nome: Optional[str] = None
     email: Optional[str] = None
     domanda: Optional[str] = None
-    tier: str = "free"   # "free" | "premium"
+    tier: Literal["free", "premium"] = "free"
+    ora_ignota: bool = False
 
 
 # ==========================
-#  ROUTE PRINCIPALE
+# ROUTE /tema_ai
 # ==========================
 @router.post("/tema_ai")
 def tema_ai_endpoint(
@@ -58,32 +54,29 @@ def tema_ai_endpoint(
     user: UserContext = Depends(get_current_user),
 ):
     """
-    0) Gating crediti SOLO se tier == "premium"
-    1) Calcolo tema natale
-    2) Build payload_vis (PNG + liste testuali) dal CORE
-    3) Build payload_ai
-    4) Chiamata Claude
-    5) Logging usage
-    6) Risposta finale con blocco billing
+    0) Gating crediti (se premium)
+    1) Calcolo tema natale (gestione ora_ignota)
+    1b) Payload visivo (tema_vis)
+    2) Payload AI
+    3) Chiamata Claude
+    4) Logging usage
+    5) Risposta finale
     """
 
-    # ==============================
-    # Metadati utente + request (usati in success + error)
-    # ==============================
+    # Metadati utente
     is_guest = user.sub.startswith("anon-")
     role = getattr(user, "role", None)
 
     client_source = request.headers.get("x-client-source") or "unknown"
     client_session = request.headers.get("x-client-session")
 
-    # base request_json comune (successo e errore)
     request_log_base: Dict[str, Any] = {
         "body": body.dict(),
         "client_source": client_source,
         "client_session": client_session,
     }
 
-    # Variabili di stato usate sia in success path che in error path
+    # Stato crediti
     state = None
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
@@ -125,44 +118,50 @@ def tema_ai_endpoint(
             else:
                 billing_mode = "denied"
         else:
-            # tier free: nessun consumo, ma salviamo comunque lo stato (es. last_seen)
+            # tier free: nessun consumo, ma salviamo comunque lo stato
             save_user_credits_state(state)
             billing_mode = "free"
 
         # ====================================================
-        # 1) Calcolo tema natale
+        # 1) Calcolo tema natale (gestione ORA IGNOTA)
         # ====================================================
-        try:
-            tema = costruisci_tema_natale(
-                body.citta,
-                body.data,
-                body.ora,
-                sistema_case="equal",
-            )
-        except Exception as e:
-            logger.exception("[TEMA_AI] Errore nel calcolo del tema natale")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Errore nel calcolo del tema natale: {e}",
-            )
+        ora_effettiva = (
+            "12:00"
+            if body.ora_ignota or not body.ora
+            else body.ora
+        )
+
+        tema = costruisci_tema_natale(
+            citta=body.citta,
+            data_nascita=body.data,
+            ora_nascita=ora_effettiva,
+            sistema_case="equal",
+        )
+
+        if not isinstance(tema.get("input"), dict):
+            tema["input"] = {}
+        tema["input"]["ora_ignota"] = bool(body.ora_ignota)
 
         # ====================================================
         # 1b) Costruzione payload VISIVO (tema_vis) dal CORE
         # ====================================================
         try:
-            # payload di base (meta, ecc.)
             tema_vis = build_tema_vis_payload(tema)
 
-            # 🔹 PIANETI / CASE / ASPETTI natali
+            ora_ignota_flag = bool((tema.get("input") or {}).get("ora_ignota", False))
+
             pianeti_decod = tema.get("pianeti_decod") or {}
             asc_mc_case = tema.get("asc_mc_case") or {}
             aspetti = tema.get("natal_aspects") or []
 
-            # 🔹 PNG ruota-only (usa anche gli aspetti per disegno interno)
+            # se ora ignota → niente case per grafico e testo
+            asc_mc_case_for_draw = {} if ora_ignota_flag else asc_mc_case
+
+            # --- grafico ---
             try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
-                    asc_mc_case=asc_mc_case,
+                    asc_mc_case=asc_mc_case_for_draw,
                     aspetti=aspetti,
                 )
                 tema_vis["chart_png_base64"] = chart_png_base64
@@ -172,27 +171,47 @@ def tema_ai_endpoint(
                     ge,
                 )
 
-            # 🔹 Payload testuale per frontend (Pianeti + Aspetti)
+            # --- payload testuale pianeti + aspetti ---
             try:
                 text_payload = build_tema_text_payload(
                     pianeti_decod=pianeti_decod,
-                    asc_mc_case=asc_mc_case,
+                    asc_mc_case=asc_mc_case_for_draw,
                     aspetti=aspetti,
                 )
-                tema_vis["pianeti"] = text_payload.get("pianeti", [])
-                tema_vis["aspetti"] = text_payload.get("aspetti", [])
+                pianeti_vis = text_payload.get("pianeti", [])
+                aspetti_vis = text_payload.get("aspetti", [])
+
+                if ora_ignota_flag:
+                    # togliamo info di casa e la parte "Casa X" dalla label
+                    import re
+
+                    for p in pianeti_vis:
+                        p["casa"] = None
+                        label = p.get("label") or ""
+                        # rimuove ", Casa 10" o " Casa 10"
+                        label = re.sub(r",?\s*Casa\s+\d+\b", "", label)
+                        p["label"] = label
+
+                    # togliamo anche ASC/MC dai meta, se presenti
+                    meta = tema_vis.get("meta") or {}
+                    for k in [
+                        "ascendente_segno",
+                        "ascendente_gradi_segno",
+                        "mc_segno",
+                        "mc_gradi_segno",
+                    ]:
+                        if k in meta:
+                            meta.pop(k, None)
+                    tema_vis["meta"] = meta
+
+                tema_vis["pianeti"] = pianeti_vis
+                tema_vis["aspetti"] = aspetti_vis
+
             except Exception as te:
                 logger.exception(
                     "[TEMA_AI] Errore nella costruzione del payload testuale tema_vis: %r",
                     te,
                 )
-
-        except Exception as e:
-            logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Errore nella costruzione del payload visivo del tema: {e}",
-            )
 
         # ====================================================
         # 2) Build payload AI
@@ -203,7 +222,7 @@ def tema_ai_endpoint(
                 nome=body.nome,
                 email=body.email,
                 domanda=body.domanda,
-                tier=body.tier,   # "free" o "premium" influenza il prompt
+                tier=body.tier,   # "free" o "premium"
             )
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nella costruzione del payload AI")
@@ -215,6 +234,8 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
+        from astrobot_core.ai_tema_claude import call_claude_tema_ai
+
         ai_debug = call_claude_tema_ai(payload_ai, tier=body.tier)
 
         raw = (
@@ -247,7 +268,6 @@ def tema_ai_endpoint(
             model = None
             latency_ms = None
 
-        # Calcolo costi per logging (paid vs free_credit)
         cost_paid_credits = 0
         cost_free_credits = 0
 
@@ -329,7 +349,7 @@ def tema_ai_endpoint(
             "status": "ok",
             "scope": "tema_ai",
             "input": body.dict(),
-            "tema_vis": tema_vis,        # 👈 PNG + pianeti/aspetti testuali
+            "tema_vis": tema_vis,        # PNG + pianeti/aspetti testuali
             "payload_ai": payload_ai,
             "result": {
                 "error": "JSON non valido" if parsed is None else None,
@@ -339,7 +359,7 @@ def tema_ai_endpoint(
             },
             "ai_debug": ai_debug,
             "billing": {
-                "mode": billing_mode,                 # "free", "paid" o "free_credit"
+                "mode": billing_mode,
                 "remaining_credits": (
                     state.paid_credits if state is not None else None
                 ),
