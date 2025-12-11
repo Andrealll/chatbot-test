@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import calendar
 
+from astrobot_core.kb.tema_kb import build_kb_oroscopo_glossario
 from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
 from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
 from astrobot_core.ai_oroscopo_claude import call_claude_oroscopo_ai
-from astrobot_core.kb.tema_kb import build_kb_tema_glossario
 
 # === AUTH + CREDITI ===
 from auth import get_current_user, UserContext
@@ -687,8 +687,26 @@ def build_oroscopo_struct_from_pipe(
     pipe: Dict[str, Any],
     persona: Persona,
 ) -> Dict[str, Any]:
+    # --- DEBUG: cosa contiene la pipe? ---
+    logger.info("[OROSCOPO][STRUCT] pipe keys: %s", list(pipe.keys()))
+
     tema = pipe.get("tema_natale") or {}
     profilo_natale = pipe.get("profilo_natale") or {}
+
+    logger.info("[OROSCOPO][STRUCT] tema_natale keys: %s", list(tema.keys()))
+    logger.info("[OROSCOPO][STRUCT] tipo tema['pianeti_decod']: %s", type(tema.get("pianeti_decod")))
+    logger.info("[OROSCOPO][STRUCT] tipo tema['natal_aspects']: %s", type(tema.get("natal_aspects")))
+    logger.info("[OROSCOPO][STRUCT] tipo tema['natal_houses']: %s", type(tema.get("natal_houses")))
+
+    # --- CERCA ALTRI BLOCCHI CHE CONTENGONO UN TEMA COMPLETO ---
+    tema_candidates = []
+    for k, v in pipe.items():
+        if isinstance(v, dict) and (
+            "pianeti_decod" in v or "natal_aspects" in v or "natal_houses" in v
+        ):
+            tema_candidates.append(k)
+    logger.info("[OROSCOPO][STRUCT] possibili blocchi tema completi: %s", tema_candidates)
+
 
     periodo_output = _pick_period_block(pipe, persona) or {}
     date_range = periodo_output.get("date_range") or {}
@@ -723,7 +741,10 @@ def build_oroscopo_struct_from_pipe(
     # ==============================
     kb_glossario_tema: Dict[str, Any] = {}
     try:
-        kb_glossario_tema = build_kb_tema_glossario(tema) or {}
+        kb_glossario_tema = build_kb_oroscopo_glossario(
+        tema=tema,
+        period_block=period_block,
+        ) or {}
         if kb_glossario_tema:
             logger.info(
                 "[OROSCOPO_AI] kb_glossario_tema costruito: "
@@ -752,6 +773,7 @@ def build_oroscopo_struct_from_pipe(
         "tema": tema,
         "profilo_natale": profilo_natale,
         "kb_hooks": kb_hooks,
+        "kb_glossario_tema": kb_glossario_tema,  # QUI il nuovo glossario natal vs oggi
         "periodi": {
             persona.periodo: period_block,
         },
