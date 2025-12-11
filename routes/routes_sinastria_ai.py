@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 
 from astrobot_core.kb.tema_kb import build_aspetti_natali_con_kb
-
 from astrobot_core.sinastria import sinastria as calcola_sinastria
 from astrobot_core.ai_sinastria_claude import call_claude_sinastria_ai
 
@@ -22,6 +21,9 @@ from astrobot_auth.credits_logic import (
     log_usage_event,
     PremiumDecision,
 )
+
+import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +44,9 @@ SINASTRIA_PREMIUM_COST = 3  # quante volte "vale" una sinastria premium
 class Persona(BaseModel):
     citta: str
     data: str        # YYYY-MM-DD
-    ora: str         # HH:MM
+    ora: str         # "HH:MM" oppure "" se ora ignota
     nome: Optional[str] = None
+    ora_ignota: bool = False   # 👈 nuovo campo
 
 
 class SinastriaAIRequest(BaseModel):
@@ -55,7 +58,7 @@ class SinastriaAIRequest(BaseModel):
 # ==========================
 #  ROUTE PRINCIPALE
 # ==========================
-@router.post("/")  # 👈 path relativo, quindi POST /sinastria_ai/
+@router.post("/")
 async def sinastria_ai_endpoint(
     body: SinastriaAIRequest,
     request: Request,
@@ -64,10 +67,10 @@ async def sinastria_ai_endpoint(
     """
     0) Gating crediti SOLO se tier == "premium"
     1) Calcolo sinastria (numerico)
-    2) Build payload_ai
+    2) Build payload_ai (compatto + KB aspetti solo premium)
     3) Chiamata Claude
     4) Logging usage
-    5) Risposta finale con blocco billing
+    5) Risposta finale con blocco billing + payload_vis per la UI
     """
 
     # ==============================
@@ -94,7 +97,6 @@ async def sinastria_ai_endpoint(
     paid_credits_after: Optional[int] = None
     free_credits_used_before: Optional[int] = None
     free_credits_used_after: Optional[int] = None
-
 
     try:
         # ====================================================
@@ -133,23 +135,37 @@ async def sinastria_ai_endpoint(
             billing_mode = "free"
 
         # ====================================================
-        # 1) Parsing datetime + calcolo sinastria
+        # 1) Parsing datetime (solo validazione formato) + supporto ora ignota
         # ====================================================
+        def _build_dt(data_str: str, ora_str: str, ora_ignota: bool) -> datetime:
+            """
+            Se ora_ignota=True o ora_str è vuota:
+              - usiamo internamente le 12:00 SOLO per i calcoli numerici
+              - ma il flag di ora ignota verrà propagato nel payload AI.
+            """
+            if ora_ignota or not ora_str:
+                return datetime.fromisoformat(f"{data_str} 12:00")
+            return datetime.fromisoformat(f"{data_str} {ora_str}")
+
         try:
-            dt_A = datetime.fromisoformat(f"{body.A.data} {body.A.ora}")
-            dt_B = datetime.fromisoformat(f"{body.B.data} {body.B.ora}")
+            dt_A = _build_dt(body.A.data, body.A.ora, body.A.ora_ignota)
+            dt_B = _build_dt(body.B.data, body.B.ora, body.B.ora_ignota)
         except Exception as e:
             raise HTTPException(
                 status_code=400,
                 detail=f"Formato data/ora non valido: {e}",
             )
 
+              # ====================================================
+        # 1b) Calcolo sinastria (numerico) → sinastria_data
+        # ====================================================
         try:
+            # firma reale del core: sinastria(dt_A, citta_A, dt_B, citta_B)
             sinastria_data = calcola_sinastria(
-                dt_A,
-                body.A.citta,
-                dt_B,
-                body.B.citta,
+                dt_A,          # 👈 datetime A
+                body.A.citta,  # 👈 città A
+                dt_B,          # 👈 datetime B
+                body.B.citta,  # 👈 città B
             )
         except Exception as e:
             logger.exception("[SINASTRIA_AI] Errore nel calcolo della sinastria")
@@ -159,33 +175,13 @@ async def sinastria_ai_endpoint(
             )
 
         # ====================================================
-        # 1b) KB ASPETTI per SINASTRIA (solo PREMIUM, via build_aspetti_natali_con_kb)
-        # ====================================================
-        kb_aspetti_sinastria = []
-        if body.tier == "premium":
-            try:
-                top_stretti = (
-                    sinastria_data
-                    .get("sinastria", {})
-                    .get("top_stretti", [])
-                )
-
-                # build_aspetti_natali_con_kb si aspetta un dict con "natal_aspects"
-                kb_aspetti_sinastria = build_aspetti_natali_con_kb(
-                    {"natal_aspects": top_stretti}
-                )
-            except Exception as e:
-                logger.exception(
-                    "[SINASTRIA_AI] Errore costruendo KB aspetti sinastria: %r",
-                    e,
-                )
-                kb_aspetti_sinastria = []
-
-        # ====================================================
         # 1c) Costruzione payload sinastria_vis per la UI
         #     (NON usato per l'AI, solo frontend)
         # ====================================================
-        def _build_vis_tema(tema_dict: Dict[str, Any], nome_fallback: str) -> Dict[str, Any]:
+        def _build_vis_tema(
+            tema_dict: Dict[str, Any],
+            nome_fallback: str,
+        ) -> Dict[str, Any]:
             if not isinstance(tema_dict, dict):
                 tema_dict = {}
 
@@ -216,7 +212,7 @@ async def sinastria_ai_endpoint(
             return {
                 "nome": nome_fallback,
                 "data": tema_dict.get("data"),
-                "citta": None,  # opzionale, lato UI usi body.A.citta / body.B.citta
+                "citta": None,  # lato UI usi body.A.citta / body.B.citta
                 "pianeti": pianeti_vis,
             }
 
@@ -238,7 +234,7 @@ async def sinastria_ai_endpoint(
             tipo = asp.get("tipo")
             orb = asp.get("orb", asp.get("delta"))
             try:
-                orb_str = f"{float(orb):.1f}°" if isinstance(orb, (int, float, float)) else None
+                orb_str = f"{float(orb):.1f}°" if isinstance(orb, (int, float)) else None
             except Exception:
                 orb_str = None
 
@@ -271,20 +267,8 @@ async def sinastria_ai_endpoint(
             "aspetti_top": aspetti_vis,
         }
 
-
-
-
-          # ====================================================
-        # 2) Build payload AI (versione ULTRA COMPATTA)
-        #    → passiamo a Claude solo:
-        #      - A_compatto: per ogni pianeta {segno, casa}
-        #      - B_compatto: idem
-        #      - top_stretti_compatti: per ogni aspetto solo
-        #        {pianetaA, pianetaB, tipo, orb}
-        #    Inoltre, SOLO PER PREMIUM:
-        #      - kb_aspetti_sinastria: ottenuto da build_aspetti_natali_con_kb
-        #        applicato ai top_stretti raw.
-        #    Tutto il resto resta in sinastria_data (per grafici/debug).
+        # ====================================================
+        # 2) Build payload AI (versione ULTRA COMPATTA + KB ASPETTI PREMIUM)
         # ====================================================
         try:
             sinastria_inner = sinastria_data.get("sinastria", {}) or {}
@@ -292,17 +276,37 @@ async def sinastria_ai_endpoint(
             temaB = sinastria_data.get("B") or {}
 
             def _compress_tema(tema: Dict[str, Any]) -> Dict[str, Any]:
-                """Riduce il tema a: data + pianeti {nome: {segno, casa}}."""
+                """
+                Riduce il tema a:
+                - data
+                - pianeti { nome: { segno, casa } }
+
+                Le case vengono prese PRIMA da info["casa"], se presente,
+                altrimenti dalla mappa tema["natal_houses"][nome_pianeta],
+                come abbiamo fatto per il payload di TEMA.
+                """
                 pianeti_decod = tema.get("pianeti_decod") or {}
+                natal_houses = tema.get("natal_houses") or {}
+
                 pianeti_compatti: Dict[str, Any] = {}
 
                 if isinstance(pianeti_decod, dict):
                     for nome, info in pianeti_decod.items():
                         if not isinstance(info, dict):
                             continue
+
+                        segno = info.get("segno")
+
+                        # 1) prova da info["casa"]
+                        casa_val = info.get("casa")
+
+                        # 2) se mancante, prova da natal_houses[nome]
+                        if casa_val is None and isinstance(natal_houses, dict):
+                            casa_val = natal_houses.get(nome)
+
                         pianeti_compatti[nome] = {
-                            "segno": info.get("segno"),
-                            "casa": info.get("casa"),
+                            "segno": segno,
+                            "casa": casa_val,
                         }
 
                 return {
@@ -310,8 +314,23 @@ async def sinastria_ai_endpoint(
                     "pianeti": pianeti_compatti,
                 }
 
-            # top_stretti raw (per grafici/KB) + compatti (per AI)
+            # top_stretti raw (per KB) + filtro Ascendente se ora ignota
             top_stretti_raw = sinastria_inner.get("top_stretti", []) or []
+
+            if body.A.ora_ignota or body.B.ora_ignota:
+                filtered = []
+                for asp in top_stretti_raw:
+                    if not isinstance(asp, dict):
+                        continue
+                    p1 = asp.get("pianeta1")
+                    p2 = asp.get("pianeta2")
+                    # se una delle due parti è Ascendente, lo togliamo
+                    if p1 == "Ascendente" or p2 == "Ascendente":
+                        continue
+                    filtered.append(asp)
+                top_stretti_raw = filtered
+
+            # compatti (per AI)
             top_stretti_compatti = []
             for asp in top_stretti_raw:
                 if not isinstance(asp, dict):
@@ -332,20 +351,66 @@ async def sinastria_ai_endpoint(
                 "top_stretti": top_stretti_compatti,
             }
 
-            # KB ASPETTI SINASTRIA (solo premium, e solo se riusciamo a costruirlo)
-            kb_aspetti_sinastria = []
+            # KB ASPETTI SINASTRIA (solo premium, struttura tipo glossario senza ripetizioni)
+            kb_glossario_aspetti: Optional[Dict[str, Any]] = None
             if body.tier == "premium":
                 try:
                     # build_aspetti_natali_con_kb si aspetta {"natal_aspects": [...]}
-                    kb_aspetti_sinastria = build_aspetti_natali_con_kb(
+                    kb_rows = build_aspetti_natali_con_kb(
                         {"natal_aspects": top_stretti_raw}
                     )
+
+                    pianeti_map: Dict[str, str] = {}
+                    aspetti_map: Dict[str, str] = {}
+                    coppie_rilevanti = []
+
+                    for row in kb_rows:
+                        if not isinstance(row, dict):
+                            continue
+
+                        p1 = row.get("pianeta1")
+                        p2 = row.get("pianeta2")
+                        tipo = row.get("tipo")
+                        orb = row.get("orb")
+
+                        desc_p1 = row.get("descrizione_pianeta1")
+                        desc_p2 = row.get("descrizione_pianeta2")
+                        desc_asp = row.get("descrizione_aspetto")
+
+                        # Glossario pianeti → ogni pianeta una sola volta
+                        if p1 and desc_p1 and p1 not in pianeti_map:
+                            pianeti_map[p1] = desc_p1
+                        if p2 and desc_p2 and p2 not in pianeti_map:
+                            pianeti_map[p2] = desc_p2
+
+                        # Glossario aspetti → ogni tipo ("congiunzione", "quadratura", ...) una sola volta
+                        if tipo and desc_asp and tipo not in aspetti_map:
+                            aspetti_map[tipo] = desc_asp
+
+                        # Lista coppie rilevanti (senza testi lunghi)
+                        if p1 and p2 and tipo:
+                            coppie_rilevanti.append(
+                                {
+                                    "pianeta1": p1,
+                                    "pianeta2": p2,
+                                    "tipo": tipo,
+                                    "orb": orb,
+                                }
+                            )
+
+                    if pianeti_map or aspetti_map or coppie_rilevanti:
+                        kb_glossario_aspetti = {
+                            "pianeti": pianeti_map,                # es. "Sole" → descrizione sintetica
+                            "aspetti": aspetti_map,                # es. "quadratura" → descrizione sintetica
+                            "coppie_rilevanti": coppie_rilevanti,  # solo struttura, niente testi ripetuti
+                        }
+
                 except Exception as kb_err:
                     logger.exception(
-                        "[SINASTRIA_AI] Errore costruendo kb_aspetti_sinastria: %r",
+                        "[SINASTRIA_AI] Errore costruendo kb_aspetti_sinastria (glossario): %r",
                         kb_err,
                     )
-                    kb_aspetti_sinastria = []
+                    kb_glossario_aspetti = None
 
             payload_ai: Dict[str, Any] = {
                 "meta": {
@@ -354,13 +419,48 @@ async def sinastria_ai_endpoint(
                     "lingua": "it",
                     "nome_A": body.A.nome,
                     "nome_B": body.B.nome,
+                    "ora_ignota_A": body.A.ora_ignota,
+                    "ora_ignota_B": body.B.ora_ignota,
                 },
                 "sinastria": sinastria_compatta,
             }
 
-            # Aggiungo il KB solo se c'è qualcosa (e solo premium a monte)
-            if kb_aspetti_sinastria:
-                payload_ai["kb_aspetti_sinastria"] = kb_aspetti_sinastria
+            # Aggiungo il KB glossario solo se esiste (solo premium a monte)
+            if kb_glossario_aspetti:
+                payload_ai["kb_aspetti_sinastria"] = kb_glossario_aspetti
+
+            # ====================================================
+            # 2b) DEBUG: DIMENSIONE PAYLOAD + SALVATAGGIO SU FILE
+            # ====================================================
+            try:
+                payload_str = json.dumps(payload_ai, ensure_ascii=False)
+                payload_size = len(payload_str)
+
+                meta_len = len(json.dumps(payload_ai.get("meta", {}), ensure_ascii=False))
+                sinastria_len = len(json.dumps(payload_ai.get("sinastria", {}), ensure_ascii=False))
+                kb_len = len(
+                    json.dumps(payload_ai.get("kb_aspetti_sinastria", {}), ensure_ascii=False)
+                ) if payload_ai.get("kb_aspetti_sinastria") else 0
+
+                print("\n[DEBUG SINASTRIA PAYLOAD] CHAR COUNTS:")
+                print(f"  - payload_total: {payload_size} char")
+                print(f"  - meta: {meta_len} char")
+                print(f"  - sinastria: {sinastria_len} char")
+                print(f"  - kb_aspetti_sinastria: {kb_len} char")
+
+                debug_dir = os.path.join("debug_payloads", "sinastria_ai")
+                os.makedirs(debug_dir, exist_ok=True)
+
+                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                filename = f"payload_sinastria_{body.tier}_{ts}.json"
+                filepath = os.path.join(debug_dir, filename)
+
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(payload_str)
+
+                print(f"[DEBUG SINASTRIA PAYLOAD] payload salvato su: {filepath}")
+            except Exception as dbg_err:
+                print(f"[DEBUG SINASTRIA PAYLOAD] ERRORE debug payload: {dbg_err}")
 
         except Exception as e:
             logger.exception("[SINASTRIA_AI] Errore nella costruzione del payload AI")
@@ -368,8 +468,6 @@ async def sinastria_ai_endpoint(
                 status_code=500,
                 detail=f"Errore nella costruzione del payload AI: {e}",
             )
-
-
 
         # ====================================================
         # 3) Chiamata Claude
@@ -388,7 +486,7 @@ async def sinastria_ai_endpoint(
             ai_debug_block = None
 
             if isinstance(sinastria_ai, dict):
-                # 1) Caso semplice: debug ai livello top
+                # 1) Caso semplice: debug a livello top
                 ai_debug_block = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
 
                 # 2) Caso: debug dentro meta (es. result["meta"]["ai_debug"])
@@ -399,20 +497,12 @@ async def sinastria_ai_endpoint(
 
                 # 3) Caso wrapper tipo {"result": {...}, "ai_debug": {...}}
                 if ai_debug_block is None:
-                    wrapper_debug = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
-                    if isinstance(wrapper_debug, dict):
-                        ai_debug_block = wrapper_debug
-
-                # 4) Caso wrapper tipo {"result": {...}, ...} con debug dentro result
-                if ai_debug_block is None:
                     inner = sinastria_ai.get("result")
                     if isinstance(inner, dict):
                         ai_debug_block = inner.get("ai_debug") or inner.get("debug")
 
             if isinstance(ai_debug_block, dict):
                 usage = ai_debug_block.get("usage") or {}
-                # supporto sia a chiavi "input_tokens"/"output_tokens"
-                # sia a eventuali forme alternative
                 tokens_in = (
                     usage.get("input_tokens")
                     or usage.get("prompt_tokens")
@@ -436,10 +526,10 @@ async def sinastria_ai_endpoint(
             tokens_out = 0
             model = None
             latency_ms = None
+
         # ====================================================
         # 3b-bis) Logging usage SU SUCCESSO
         # ====================================================
-        # Calcolo costi (paid vs free_credit) in base alla decisione
         cost_paid_credits = 0
         cost_free_credits = 0
 
@@ -449,7 +539,6 @@ async def sinastria_ai_endpoint(
             elif decision.mode == "free_credit":
                 cost_free_credits = SINASTRIA_PREMIUM_COST
 
-        # Payload di debug che salviamo in request_json su Supabase
         request_log_success = {
             **request_log_base,
             "ai_call": {
@@ -492,17 +581,28 @@ async def sinastria_ai_endpoint(
         try:
             from astrobot_core.grafici import genera_carta_sinastria
 
-            # 1) Pianeti decodificati per A e B
             pianeti_A_decod = sinastria_data["A"]["pianeti_decod"]
             pianeti_B_decod = sinastria_data["B"]["pianeti_decod"]
 
-            # 2) Aspetti cross A–B dalla struttura:
-            #    "sinastria": { "aspetti_AB": [...] }
-            aspetti_raw = sinastria_data.get("sinastria", {}).get("aspetti_AB", [])
+            aspetti_raw = sinastria_data.get("sinastria", {}).get("aspetti_AB", []) or []
 
-            # Adattamento chiavi: da pianeta1/pianeta2 -> pianetaA/pianetaB
+            # se ora ignota per almeno uno, togliamo gli aspetti con Ascendente
+            if body.A.ora_ignota or body.B.ora_ignota:
+                tmp = []
+                for asp in aspetti_raw:
+                    if not isinstance(asp, dict):
+                        continue
+                    p1 = asp.get("pianeta1")
+                    p2 = asp.get("pianeta2")
+                    if p1 == "Ascendente" or p2 == "Ascendente":
+                        continue
+                    tmp.append(asp)
+                aspetti_raw = tmp
+
             aspetti_AB = []
             for asp in aspetti_raw:
+                if not isinstance(asp, dict):
+                    continue
                 aspetti_AB.append(
                     {
                         "pianetaA": asp.get("pianeta1"),
@@ -542,10 +642,10 @@ async def sinastria_ai_endpoint(
             "input": body.dict(),
             "payload_ai": payload_ai,
             "sinastria_ai": sinastria_ai,
-            "sinastria_vis": sinastria_vis,  # 👈 nuovo blocco solo per la UI
+            "sinastria_vis": sinastria_vis,
             "chart_sinastria_base64": chart_sinastria_base64,
             "billing": {
-                "mode": billing_mode,                 # "free", "paid" o "free_credit"
+                "mode": billing_mode,
                 "remaining_credits": (
                     state.paid_credits if state is not None else None
                 ),
@@ -558,7 +658,6 @@ async def sinastria_ai_endpoint(
                 "cost_free_credits": cost_free_credits,
             },
         }
-
 
     # ====================================================
     # 5) LOG TENTATIVI FALLITI (HTTPException)

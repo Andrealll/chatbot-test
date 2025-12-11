@@ -1,4 +1,4 @@
-# chatbot_test/routes_oroscopo.py
+# chatbot_test/routes/routes_oroscopo_ai.py
 
 import logging
 from typing import Any, Dict, Optional, List, Literal
@@ -101,6 +101,10 @@ class OroscopoResponse(BaseModel):
     oroscopo_ai: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     billing: Optional[Dict[str, Any]] = None
+
+    # NUOVO: blocchi dedicati al front-end
+    grafico: Optional[Dict[str, Any]] = None
+    tabella_aspetti: Optional[List[Dict[str, Any]]] = None
 
 
 def _normalize_period(periodo: str) -> Periodo:
@@ -729,6 +733,112 @@ def build_oroscopo_struct_from_pipe(
     return oroscopo_struct
 
 
+# =========================================================
+# NUOVI HELPER: BLOCCO GRAFICO + TABELLA ASPETTI PER HTTP
+# =========================================================
+
+def _build_grafico_http_from_period_block(
+    period_block: Dict[str, Any],
+    scope: Periodo,
+) -> Dict[str, Any]:
+    """
+    Converte metriche_grafico del period_block in un formato minimal per il front-end:
+
+    {
+      "scope": "daily",
+      "axes": ["emozioni", "relazioni", "lavoro"],
+      "samples": [
+        {
+          "label": "...",
+          "datetime": "...",
+          "emozioni": 0.73,
+          "relazioni": 0.40,
+          "lavoro": 0.85
+        },
+        ...
+      ]
+    }
+    """
+    mg = period_block.get("metriche_grafico") or {}
+    samples_in = mg.get("samples") or []
+    if not isinstance(samples_in, list) or not samples_in:
+        return {}
+
+    out_samples: List[Dict[str, Any]] = []
+
+    for s in samples_in:
+        m = s.get("metrics") or {}
+        intens = m.get("intensities") or {}
+        out_samples.append(
+            {
+                "label": s.get("label"),
+                "datetime": s.get("datetime"),
+                "emozioni": intens.get("emozioni"),
+                "relazioni": intens.get("relazioni"),
+                "lavoro": intens.get("lavoro"),
+            }
+        )
+
+    return {
+        "scope": scope,
+        "axes": ["emozioni", "relazioni", "lavoro"],
+        "samples": out_samples,
+    }
+
+
+def _build_tabella_aspetti_http_from_period_block(
+    period_block: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Tabella aspetti light per il front-end, senza ripetizioni inutili:
+
+    [
+      {
+        "pianeta_transito": "...",
+        "pianeta_natale": "...",
+        "aspetto": "congiunzione/quadratura/...",
+        "intensita_discreta": "forte/debole/...",
+        "persistenza": { "data_inizio": "...", "durata_giorni": N },
+        "score_rilevanza": ...
+      },
+      ...
+    ]
+    """
+    aspetti = period_block.get("aspetti_rilevanti") or []
+    if not isinstance(aspetti, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+
+    for a in aspetti:
+        if not isinstance(a, dict):
+            continue
+        tp = a.get("pianeta_transito")
+        np = a.get("pianeta_natale")
+        asp = a.get("aspetto") or a.get("tipo")
+        if not (tp and np and asp):
+            continue
+
+        key = (str(tp), str(asp), str(np))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append(
+            {
+                "pianeta_transito": tp,
+                "pianeta_natale": np,
+                "aspetto": asp,
+                "intensita_discreta": a.get("intensita_discreta"),
+                "persistenza": a.get("persistenza"),
+                "score_rilevanza": a.get("score_rilevanza"),
+            }
+        )
+
+    return out
+
+
 def _build_payload_ai(
     scope: Periodo,
     tier: Tier,
@@ -740,6 +850,10 @@ def _build_payload_ai(
     - pipe = output di run_oroscopo_multi_snapshot
     - oroscopo_struct = stessa logica del test end-to-end
     - build_oroscopo_payload_ai di astrobot_core
+
+    NUOVO:
+    - salva oroscopo_struct dentro engine_result["oroscopo_struct"]
+      così la route può riusarlo per costruire grafico/tabella HTTP.
     """
     logger.info(
         "[OROSCOPO][PAYLOAD_AI] scope=%s tier=%s nome=%s",
@@ -767,6 +881,9 @@ def _build_payload_ai(
 
     # 1) oroscopo_struct dalla pipe
     oroscopo_struct = build_oroscopo_struct_from_pipe(pipe, persona)
+
+    # NUOVO: lo agganciamo all'engine_result per uso HTTP
+    engine_result["oroscopo_struct"] = oroscopo_struct
 
     # 2) period_code in stile "daily"/"weekly"/...
     period_code = PERIODO_IT_TO_CODE.get(periodo_ita, scope)
@@ -977,6 +1094,38 @@ async def oroscopo_ai_endpoint(
         oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
 
         # ==============================
+        # 3b) COSTRUZIONE grafico + tabella_aspetti per HTTP
+        # ==============================
+        grafico_http: Optional[Dict[str, Any]] = None
+        tabella_aspetti_http: Optional[List[Dict[str, Any]]] = None
+
+        try:
+            oroscopo_struct = engine_result.get("oroscopo_struct") or {}
+            periodi_struct = oroscopo_struct.get("periodi") or {}
+            period_block_http: Optional[Dict[str, Any]] = None
+
+            if isinstance(periodi_struct, dict) and periodi_struct:
+                # single-period: ci aspettiamo UNA sola chiave (giornaliero/settimana/mensile/annuale in IT)
+                if len(periodi_struct) == 1:
+                    period_block_http = list(periodi_struct.values())[0]
+                else:
+                    # fallback difensivo: prendiamo il primo valore
+                    period_block_http = list(periodi_struct.values())[0]
+
+            if isinstance(period_block_http, dict):
+                grafico_http = _build_grafico_http_from_period_block(
+                    period_block_http,
+                    scope=scope,
+                )
+                tabella_aspetti_http = _build_tabella_aspetti_http_from_period_block(
+                    period_block_http
+                )
+        except Exception as e:
+            logger.exception(
+                "[OROSCOPO_AI] Errore costruzione grafico/tabella HTTP: %r", e
+            )
+
+        # ==============================
         # USAGE TOKENS / LATENCY da _ai_usage
         # ==============================
         tokens_in = 0
@@ -1077,6 +1226,8 @@ async def oroscopo_ai_endpoint(
             oroscopo_ai=oroscopo_ai,
             error=None,
             billing=billing,
+            grafico=grafico_http,
+            tabella_aspetti=tabella_aspetti_http,
         )
 
     # ==============================
@@ -1185,4 +1336,6 @@ async def oroscopo_ai_endpoint(
             oroscopo_ai=None,
             error=str(exc),
             billing=billing_error,
+            grafico=None,
+            tabella_aspetti=None,
         )

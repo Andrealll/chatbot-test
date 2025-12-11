@@ -1,17 +1,18 @@
 # routes/routes_tema_ai.py
 
-from fastapi import APIRouter, HTTPException, Depends, Request
-from pydantic import BaseModel
-from typing import Any, Dict, Optional, List, Literal
-
 import json
 import logging
+from typing import Dict, Any, Optional, List, Literal
 
+from fastapi import APIRouter, HTTPException, Depends, Request
+from pydantic import BaseModel, Field
+
+from astrobot_core.ai_tema_claude import call_claude_tema_ai
 from astrobot_core.calcoli import costruisci_tema_natale
-from astrobot_core.tema_vis_payload import build_tema_vis_payload
-from astrobot_core.grafici import grafico_tema_natal
-from astrobot_core.payload_tema_ai import build_payload_tema_ai, build_tema_vis
+from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
+from astrobot_core.payload_tema_ai import build_payload_tema_ai
 
+# --- IMPORT PER AUTH + CREDITI ---
 from auth import get_current_user, UserContext
 from astrobot_auth.credits_logic import (
     load_user_credits_state,
@@ -25,27 +26,33 @@ from astrobot_auth.credits_logic import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Costi in crediti
+# ==========================
+#  Costi in crediti (parametrici)
+# ==========================
 TEMA_AI_FEATURE_KEY = "tema_ai"
-TEMA_AI_PREMIUM_COST = 2
+TEMA_AI_PREMIUM_COST = 2  # se domani vuoi 3/5 ecc, cambi solo qui
 
 
 # ==========================
-# Request model ALLINEATO AL FRONTEND
+#  Request model
 # ==========================
 class TemaAIRequest(BaseModel):
+    # il frontend manda data_nascita / ora_nascita → usiamo alias
     citta: str
-    data: str                 # "YYYY-MM-DD"
-    ora: Optional[str] = None # "HH:MM" oppure None
+    data: str = Field(..., alias="data_nascita")          # "YYYY-MM-DD"
+    ora: Optional[str] = Field(None, alias="ora_nascita") # "HH:MM" o vuota
     nome: Optional[str] = None
     email: Optional[str] = None
     domanda: Optional[str] = None
     tier: Literal["free", "premium"] = "free"
     ora_ignota: bool = False
 
+    class Config:
+        allow_population_by_field_name = True
+
 
 # ==========================
-# ROUTE /tema_ai
+#  ROUTE PRINCIPALE
 # ==========================
 @router.post("/tema_ai")
 def tema_ai_endpoint(
@@ -54,16 +61,15 @@ def tema_ai_endpoint(
     user: UserContext = Depends(get_current_user),
 ):
     """
-    0) Gating crediti (se premium)
-    1) Calcolo tema natale (gestione ora_ignota)
-    1b) Payload visivo (tema_vis)
-    2) Payload AI
-    3) Chiamata Claude
-    4) Logging usage
-    5) Risposta finale
+    0) Gating crediti SOLO se tier == "premium"
+    1) Calcolo tema natale (usa costruisci_tema_natale che gestisce ora_ignota)
+    2) Build payload_vis (PNG + liste testuali) dal CORE
+    3) Build payload_ai
+    4) Chiamata Claude
+    5) Logging usage
+    6) Risposta finale con blocco billing
     """
 
-    # Metadati utente
     is_guest = user.sub.startswith("anon-")
     role = getattr(user, "role", None)
 
@@ -71,12 +77,12 @@ def tema_ai_endpoint(
     client_session = request.headers.get("x-client-session")
 
     request_log_base: Dict[str, Any] = {
-        "body": body.dict(),
+        # uso by_alias=True così nel log vedi data_nascita/ora_nascita
+        "body": body.dict(by_alias=True),
         "client_source": client_source,
         "client_session": client_session,
     }
 
-    # Stato crediti
     state = None
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
@@ -118,50 +124,56 @@ def tema_ai_endpoint(
             else:
                 billing_mode = "denied"
         else:
-            # tier free: nessun consumo, ma salviamo comunque lo stato
+            # tier free: nessun consumo, ma salviamo comunque lo stato (es. last_seen)
             save_user_credits_state(state)
             billing_mode = "free"
 
         # ====================================================
-        # 1) Calcolo tema natale (gestione ORA IGNOTA)
+        # 1) Calcolo tema natale
+        #    → costruisci_tema_natale gestisce internamente ora_ignota:
+        #      - se ora_nascita None/"" → niente ASC / case / asc_ruler
         # ====================================================
-        ora_effettiva = (
-            "12:00"
-            if body.ora_ignota or not body.ora
-            else body.ora
-        )
+        ora_raw = (body.ora or "").strip()
+        ora_for_tema = None if body.ora_ignota or not ora_raw else ora_raw
 
-        tema = costruisci_tema_natale(
-            citta=body.citta,
-            data_nascita=body.data,
-            ora_nascita=ora_effettiva,
-            sistema_case="equal",
-        )
+        try:
+            tema = costruisci_tema_natale(
+                citta=body.citta,
+                data_nascita=body.data,
+                ora_nascita=ora_for_tema,
+                sistema_case="equal",
+            )
+            # allineo comunque il flag, nel caso serva altrove
+            tema_input = tema.get("input") or {}
+            tema_input["ora_ignota"] = body.ora_ignota or tema_input.get(
+                "ora_ignota", False
+            )
+            tema["input"] = tema_input
 
-        if not isinstance(tema.get("input"), dict):
-            tema["input"] = {}
-        tema["input"]["ora_ignota"] = bool(body.ora_ignota)
+        except Exception as e:
+            logger.exception("[TEMA_AI] Errore nel calcolo del tema natale")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Errore nel calcolo del tema natale: {e}",
+            )
 
         # ====================================================
-        # 1b) Costruzione payload VISIVO (tema_vis) dal CORE
+        # 1b) Costruzione payload VISIVO (tema_vis)
         # ====================================================
         try:
-            tema_vis = build_tema_vis_payload(tema)
-
-            ora_ignota_flag = bool((tema.get("input") or {}).get("ora_ignota", False))
-
+            # payload di base (meta, ecc.) → se hai una funzione dedicata, usala;
+            # qui ricostruiamo il blocco con grafico + legenda pianeti/aspetti.
             pianeti_decod = tema.get("pianeti_decod") or {}
             asc_mc_case = tema.get("asc_mc_case") or {}
             aspetti = tema.get("natal_aspects") or []
 
-            # se ora ignota → niente case per grafico e testo
-            asc_mc_case_for_draw = {} if ora_ignota_flag else asc_mc_case
+            tema_vis: Dict[str, Any] = {}
 
-            # --- grafico ---
+            # PNG ruota-only (usa anche gli aspetti per disegno interno)
             try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
-                    asc_mc_case=asc_mc_case_for_draw,
+                    asc_mc_case=asc_mc_case,
                     aspetti=aspetti,
                 )
                 tema_vis["chart_png_base64"] = chart_png_base64
@@ -171,47 +183,29 @@ def tema_ai_endpoint(
                     ge,
                 )
 
-            # --- payload testuale pianeti + aspetti ---
+            # Payload testuale per frontend (Pianeti + Aspetti)
             try:
                 text_payload = build_tema_text_payload(
                     pianeti_decod=pianeti_decod,
-                    asc_mc_case=asc_mc_case_for_draw,
+                    asc_mc_case=asc_mc_case,
                     aspetti=aspetti,
                 )
-                pianeti_vis = text_payload.get("pianeti", [])
-                aspetti_vis = text_payload.get("aspetti", [])
-
-                if ora_ignota_flag:
-                    # togliamo info di casa e la parte "Casa X" dalla label
-                    import re
-
-                    for p in pianeti_vis:
-                        p["casa"] = None
-                        label = p.get("label") or ""
-                        # rimuove ", Casa 10" o " Casa 10"
-                        label = re.sub(r",?\s*Casa\s+\d+\b", "", label)
-                        p["label"] = label
-
-                    # togliamo anche ASC/MC dai meta, se presenti
-                    meta = tema_vis.get("meta") or {}
-                    for k in [
-                        "ascendente_segno",
-                        "ascendente_gradi_segno",
-                        "mc_segno",
-                        "mc_gradi_segno",
-                    ]:
-                        if k in meta:
-                            meta.pop(k, None)
-                    tema_vis["meta"] = meta
-
-                tema_vis["pianeti"] = pianeti_vis
-                tema_vis["aspetti"] = aspetti_vis
-
+                tema_vis["pianeti"] = text_payload.get("pianeti", [])
+                tema_vis["aspetti"] = text_payload.get("aspetti", [])
             except Exception as te:
                 logger.exception(
                     "[TEMA_AI] Errore nella costruzione del payload testuale tema_vis: %r",
                     te,
                 )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Errore nella costruzione del payload visivo del tema: {e}",
+            )
 
         # ====================================================
         # 2) Build payload AI
@@ -222,7 +216,7 @@ def tema_ai_endpoint(
                 nome=body.nome,
                 email=body.email,
                 domanda=body.domanda,
-                tier=body.tier,   # "free" o "premium"
+                tier=body.tier,  # "free" o "premium" influenza il prompt
             )
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nella costruzione del payload AI")
@@ -234,8 +228,6 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        from astrobot_core.ai_tema_claude import call_claude_tema_ai
-
         ai_debug = call_claude_tema_ai(payload_ai, tier=body.tier)
 
         raw = (
@@ -247,7 +239,6 @@ def tema_ai_endpoint(
         # ====================================================
         # 3b) LOGGING USAGE (usage_logs) – SOLO SUCCESSO
         # ====================================================
-        usage: Dict[str, Any] = {}
         try:
             usage = (ai_debug.get("ai_debug") or {}).get("usage") or {}
         except Exception:
@@ -315,7 +306,7 @@ def tema_ai_endpoint(
             return {
                 "status": "error",
                 "message": "Claude non ha restituito testo.",
-                "input": body.dict(),
+                "input": body.dict(by_alias=True),
                 "payload_ai": payload_ai,
                 "result": None,
                 "ai_debug": ai_debug,
@@ -348,7 +339,7 @@ def tema_ai_endpoint(
         return {
             "status": "ok",
             "scope": "tema_ai",
-            "input": body.dict(),
+            "input": body.dict(by_alias=True),
             "tema_vis": tema_vis,        # PNG + pianeti/aspetti testuali
             "payload_ai": payload_ai,
             "result": {
@@ -359,7 +350,7 @@ def tema_ai_endpoint(
             },
             "ai_debug": ai_debug,
             "billing": {
-                "mode": billing_mode,
+                "mode": billing_mode,  # "free", "paid" o "free_credit"
                 "remaining_credits": (
                     state.paid_credits if state is not None else None
                 ),
