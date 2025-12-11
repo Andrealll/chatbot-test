@@ -12,6 +12,7 @@ import calendar
 from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
 from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
 from astrobot_core.ai_oroscopo_claude import call_claude_oroscopo_ai
+from astrobot_core.kb.tema_kb import build_kb_tema_glossario
 
 # === AUTH + CREDITI ===
 from auth import get_current_user, UserContext
@@ -54,7 +55,6 @@ PERIODO_IT_TO_CODE = {
     "annuale": "yearly",
 }
 
-
 class OroscopoAIRequest(BaseModel):
     citta: str
     data: str
@@ -63,6 +63,7 @@ class OroscopoAIRequest(BaseModel):
     email: Optional[str] = None
     domanda: Optional[str] = None
     tier: Optional[str] = "free"
+    ora_ignota: Optional[bool] = False  # 👈 NUOVO
 
     @validator("data")
     def _validate_data(cls, v: str) -> str:
@@ -72,8 +73,12 @@ class OroscopoAIRequest(BaseModel):
 
     @validator("ora")
     def _validate_ora(cls, v: Optional[str]) -> Optional[str]:
+        # Accettiamo None / "" come "nessuna ora" (es. ora ignota)
         if v is None:
             return v
+        v = v.strip()
+        if v == "":
+          return None
         parts = v.split(":")
         if len(parts) != 2:
             raise ValueError("ora deve essere in formato HH:MM")
@@ -81,7 +86,6 @@ class OroscopoAIRequest(BaseModel):
         if not (h.isdigit() and m.isdigit()):
             raise ValueError("ora deve contenere solo numeri (HH:MM)")
         return v
-
 
 class OroscopoBaseInput(OroscopoAIRequest):
     """
@@ -140,7 +144,6 @@ def _normalize_tier(raw: Optional[str]) -> Tier:
         return "premium"
     return "free"
 
-
 @dataclass
 class Persona:
     nome: str
@@ -149,6 +152,8 @@ class Persona:
     ora: str
     periodo: str
     tier: str
+    ora_ignota: bool = False  # 👈 NUOVO
+
 
 
 def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
@@ -678,8 +683,6 @@ def build_debug_kb_hooks(
         "aspetti_rilevanti": aspetti,
         "combined_markdown": combined_md,
     }
-
-
 def build_oroscopo_struct_from_pipe(
     pipe: Dict[str, Any],
     persona: Persona,
@@ -705,6 +708,9 @@ def build_oroscopo_struct_from_pipe(
 
     period_block = _cleanup_period_block_for_ai(period_block_raw, persona)
 
+    # ==============================
+    # KB DEBUG (combined_markdown) – come prima
+    # ==============================
     kb_hooks = build_debug_kb_hooks(
         period_block=period_block,
         tema=tema,
@@ -712,12 +718,33 @@ def build_oroscopo_struct_from_pipe(
         persona=persona,
     )
 
+    # ==============================
+    # KB GLOSSARIO TEMA – NUOVO
+    # ==============================
+    kb_glossario_tema: Dict[str, Any] = {}
+    try:
+        kb_glossario_tema = build_kb_tema_glossario(tema) or {}
+        if kb_glossario_tema:
+            logger.info(
+                "[OROSCOPO_AI] kb_glossario_tema costruito: "
+                "pianeti=%d, segni=%d, case=%d, aspetti=%d, coppie=%d",
+                len(kb_glossario_tema.get("pianeti") or {}),
+                len(kb_glossario_tema.get("segni") or {}),
+                len(kb_glossario_tema.get("case") or {}),
+                len(kb_glossario_tema.get("aspetti") or {}),
+                len(kb_glossario_tema.get("coppie_rilevanti") or []),
+            )
+    except Exception as e:
+        logger.exception("[OROSCOPO_AI] Errore build_kb_tema_glossario: %r", e)
+        kb_glossario_tema = {}
+
     oroscopo_struct = {
         "meta": {
             "nome": persona.nome,
             "citta": persona.citta,
             "data_nascita": persona.data,
             "ora_nascita": persona.ora,
+            "ora_ignota": bool(getattr(persona, "ora_ignota", False)),  # 👈 NUOVO
             "tier": persona.tier,
             "scope": "oroscopo_multi_snapshot",
             "lang": "it",
@@ -730,7 +757,10 @@ def build_oroscopo_struct_from_pipe(
         },
     }
 
+
     return oroscopo_struct
+
+
 
 
 # =========================================================
@@ -870,6 +900,8 @@ def _build_payload_ai(
         )
 
     periodo_ita = PERIODO_EN_TO_IT[scope]
+    ora_ignota_flag = bool(getattr(data_input, "ora_ignota", False))
+
     persona = Persona(
         nome=data_input.nome or "Anonimo",
         citta=data_input.citta,
@@ -877,7 +909,9 @@ def _build_payload_ai(
         ora=data_input.ora or "00:00",
         periodo=periodo_ita,
         tier=tier,
+        ora_ignota=ora_ignota_flag,  # 👈 NUOVO
     )
+
 
     # 1) oroscopo_struct dalla pipe
     oroscopo_struct = build_oroscopo_struct_from_pipe(pipe, persona)
@@ -894,6 +928,13 @@ def _build_payload_ai(
         lang="it",
         period_code=period_code,
     )
+    
+    logger.info(
+        "[OROSCOPO][PAYLOAD_AI] kb keys: %s",
+        list((payload_ai.get("kb") or {}).keys())
+    )
+
+
 
     return payload_ai
 
@@ -903,7 +944,6 @@ def _call_oroscopo_ai_claude(payload_ai: Dict[str, Any]) -> Dict[str, Any]:
     Delego tutto al client in astrobot-core.
     """
     return call_claude_oroscopo_ai(payload_ai)
-
 
 def _run_oroscopo_engine_new(
     scope: Periodo,
@@ -925,12 +965,20 @@ def _run_oroscopo_engine_new(
         data_input.data,
     )
 
+    # 👇 NUOVO: normalizzazione ora con supporto ora_ignota
+    ora_ignota_flag = bool(getattr(data_input, "ora_ignota", False))
+    ora_effettiva = data_input.ora
+
+    if ora_ignota_flag or not ora_effettiva:
+        # Se l'ora è ignota o non fornita, usiamo le 12:00 solo per i calcoli numerici
+        ora_effettiva = "12:00"
+
     pipe = run_oroscopo_multi_snapshot(
         periodo=periodo_ita,
         tier=tier,
         citta=data_input.citta,
         data_nascita=data_input.data,
-        ora_nascita=data_input.ora,
+        ora_nascita=ora_effettiva,  # 👈 usa l'ora normalizzata
         raw_date=date.today(),
     )
 
@@ -941,6 +989,7 @@ def _run_oroscopo_engine_new(
         "periodo_ita": periodo_ita,
         "pipe": pipe,
     }
+
 
 
 def _run_oroscopo_engine(
