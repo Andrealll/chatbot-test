@@ -156,7 +156,7 @@ async def sinastria_ai_endpoint(
                 detail=f"Formato data/ora non valido: {e}",
             )
 
-              # ====================================================
+        # ====================================================
         # 1b) Calcolo sinastria (numerico) → sinastria_data
         # ====================================================
         try:
@@ -181,6 +181,7 @@ async def sinastria_ai_endpoint(
         def _build_vis_tema(
             tema_dict: Dict[str, Any],
             nome_fallback: str,
+            ora_ignota: bool,  # 👈 NUOVO: serve per nascondere Ascendente/case SOLO se ora ignota
         ) -> Dict[str, Any]:
             if not isinstance(tema_dict, dict):
                 tema_dict = {}
@@ -192,22 +193,29 @@ async def sinastria_ai_endpoint(
                 for nome, info in pianeti_decod.items():
                     if not isinstance(info, dict):
                         continue
+
+                    # SOLO se ora ignota: togliamo Ascendente dalla UI
+                    if ora_ignota and nome == "Ascendente":
+                        continue
+
                     segno = info.get("segno") or info.get("segno_nome")
                     gradi_segno = (
                         info.get("gradi_segno")
                         or info.get("grado_segno")
                         or info.get("gradi")
                     )
-                    casa = info.get("casa")
 
-                    pianeti_vis.append(
-                        {
-                            "nome": nome,
-                            "segno": segno,
-                            "gradi_segno": gradi_segno,
-                            "casa": casa,
-                        }
-                    )
+                    item = {
+                        "nome": nome,
+                        "segno": segno,
+                        "gradi_segno": gradi_segno,
+                    }
+
+                    # SOLO se ora NON ignota: includiamo la casa (come prima)
+                    if not ora_ignota:
+                        item["casa"] = info.get("casa")
+
+                    pianeti_vis.append(item)
 
             return {
                 "nome": nome_fallback,
@@ -220,8 +228,8 @@ async def sinastria_ai_endpoint(
         temaB_raw = sinastria_data.get("B") or {}
         sinastria_inner = sinastria_data.get("sinastria", {}) or {}
 
-        temaA_vis = _build_vis_tema(temaA_raw, body.A.nome or "Persona A")
-        temaB_vis = _build_vis_tema(temaB_raw, body.B.nome or "Persona B")
+        temaA_vis = _build_vis_tema(temaA_raw, body.A.nome or "Persona A", body.A.ora_ignota)
+        temaB_vis = _build_vis_tema(temaB_raw, body.B.nome or "Persona B", body.B.ora_ignota)
 
         # Aspetti prevalenti (top stretti) in forma leggibile
         aspetti_top_raw = sinastria_inner.get("top_stretti", []) or []
@@ -275,15 +283,15 @@ async def sinastria_ai_endpoint(
             temaA = sinastria_data.get("A") or {}
             temaB = sinastria_data.get("B") or {}
 
-            def _compress_tema(tema: Dict[str, Any]) -> Dict[str, Any]:
+            def _compress_tema(tema: Dict[str, Any], ora_ignota: bool) -> Dict[str, Any]:
                 """
                 Riduce il tema a:
                 - data
-                - pianeti { nome: { segno, casa } }
+                - pianeti { nome: { segno, casa } } (case SOLO se ora NON ignota)
 
-                Le case vengono prese PRIMA da info["casa"], se presente,
-                altrimenti dalla mappa tema["natal_houses"][nome_pianeta],
-                come abbiamo fatto per il payload di TEMA.
+                Se ora_ignota=True:
+                - rimuove Ascendente
+                - NON include le case (case/ascendenti non affidabili)
                 """
                 pianeti_decod = tema.get("pianeti_decod") or {}
                 natal_houses = tema.get("natal_houses") or {}
@@ -295,19 +303,22 @@ async def sinastria_ai_endpoint(
                         if not isinstance(info, dict):
                             continue
 
+                        # SOLO se ora ignota: rimuovi Ascendente dal payload AI
+                        if ora_ignota and nome == "Ascendente":
+                            continue
+
                         segno = info.get("segno")
 
-                        # 1) prova da info["casa"]
-                        casa_val = info.get("casa")
+                        item: Dict[str, Any] = {"segno": segno}
 
-                        # 2) se mancante, prova da natal_houses[nome]
-                        if casa_val is None and isinstance(natal_houses, dict):
-                            casa_val = natal_houses.get(nome)
+                        # SOLO se ora NON ignota: includi casa come prima
+                        if not ora_ignota:
+                            casa_val = info.get("casa")
+                            if casa_val is None and isinstance(natal_houses, dict):
+                                casa_val = natal_houses.get(nome)
+                            item["casa"] = casa_val
 
-                        pianeti_compatti[nome] = {
-                            "segno": segno,
-                            "casa": casa_val,
-                        }
+                        pianeti_compatti[nome] = item
 
                 return {
                     "data": tema.get("data"),
@@ -346,8 +357,8 @@ async def sinastria_ai_endpoint(
 
             # Tema compattato per A e B
             sinastria_compatta: Dict[str, Any] = {
-                "A": _compress_tema(temaA),
-                "B": _compress_tema(temaB),
+                "A": _compress_tema(temaA, body.A.ora_ignota),
+                "B": _compress_tema(temaB, body.B.ora_ignota),
                 "top_stretti": top_stretti_compatti,
             }
 
