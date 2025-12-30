@@ -121,8 +121,10 @@ def tema_ai_endpoint(
                 billing_mode = "paid"
             elif decision.mode == "free_credit":
                 billing_mode = "free_credit"
+            elif decision.mode == "free_trial":
+                billing_mode = "free_trial"
             else:
-                billing_mode = "denied"
+                billing_mode = "error"
         else:
             # tier free: nessun consumo, ma salviamo comunque lo stato (es. last_seen)
             save_user_credits_state(state)

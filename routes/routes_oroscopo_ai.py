@@ -1133,8 +1133,11 @@ async def oroscopo_ai_endpoint(
                 billing_mode = "paid"
             elif decision.mode == "free_credit":
                 billing_mode = "free_credit"
+            elif decision.mode == "free_trial":
+                billing_mode = "free_trial"
             else:
-                billing_mode = "denied"
+                billing_mode = "error"
+
         else:
             # tier free: nessun consumo, ma salviamo comunque lo stato
             save_user_credits_state(state)
@@ -1234,6 +1237,8 @@ async def oroscopo_ai_endpoint(
                 cost_paid_credits = feature_cost
             elif decision.mode == "free_credit":
                 cost_free_credits = feature_cost
+            elif decision.mode == "free_trial":
+                cost_free_credits = 0  # oppure feature_cost se vuoi contarlo come "valore" trial
 
         billing = {
             "tier": tier,
