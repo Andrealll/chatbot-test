@@ -56,9 +56,9 @@ def tema_ai_endpoint(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
-    is_guest = bool(getattr(user, "sub", "")).startswith("anon-")
+    sub = str(getattr(user, "sub", "") or "")
+    is_guest = sub.startswith("anon-")
     role = getattr(user, "role", None)
-
     client_source = request.headers.get("x-client-source") or "unknown"
     client_session = request.headers.get("x-client-session")
 
