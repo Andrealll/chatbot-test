@@ -230,19 +230,33 @@ def tema_ai_endpoint(
         # ====================================================
         out = call_claude_tema_ai(payload_ai, tier=body.tier)
 
-        # NB: con il nuovo ai_tema_claude, la sorgente "vera" è out["content"] (già parsato)
-        raw_text = (out.get("ai_debug") or {}).get("raw_text") or ""
-        parsed = out.get("content")          # dict oppure None
-        parse_error = out.get("parse_error") # stringa oppure None
+        # ====================================================
+        # ✅ FIX SHAPE: nuovo wrapper ritorna {"result": <json> | {"error":..}, "ai_debug": {...}}
+        # ====================================================
+        ai_dbg = out.get("ai_debug") or {}
+        raw_text = ai_dbg.get("raw_text") or ""
+
+        r = out.get("result")
+
+        parsed: Optional[Dict[str, Any]] = None
+        parse_error: Optional[str] = None
+
+        if isinstance(r, dict) and r.get("error"):
+            # wrapper ha segnalato errore/parse_error
+            parsed = None
+            parse_error = r.get("parse_error") or r.get("detail") or None
+        else:
+            # caso OK: r è già il JSON interpretazione
+            parsed = r if isinstance(r, dict) else None
+            parse_error = None if parsed is not None else "Risposta non in formato JSON (dict)."
 
         ai_debug = {
             "result": parsed,
-            "ai_debug": out.get("ai_debug"),
+            "ai_debug": ai_dbg,
         }
 
         # ====================================================
         # 3b) LOGGING USAGE (usage_logs)
-        #     (manteniamo la tua logica, ma leggiamo dal debug del nuovo wrapper)
         # ====================================================
         try:
             usage = (ai_debug.get("ai_debug") or {}).get("usage") or {}
@@ -305,22 +319,18 @@ def tema_ai_endpoint(
             logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
 
         # ====================================================
-        # 4) Caso: Claude non ha risposto
+        # 4) Caso: Claude non ha risposto / JSON non valido
         # ====================================================
-        # Manteniamo il blocco, ma lo rendiamo coerente col nuovo wrapper:
-        # - se parsed è None → errore AI (JSON non valido / parse_error)
-        # - se raw_text è vuoto → risposta vuota
+        # NB: nessun fallback (come richiesto). Restituiamo status ok con result.error valorizzato.
         if parsed is None:
-            # NB: non facciamo fallback/parse alternativo: restituiamo l'errore così com'è.
             return {
-                "status": "error",
+                "status": "ok",
                 "scope": "tema_ai",
-                "message": out.get("error") or ("Claude non ha restituito testo." if not raw_text else "JSON non valido"),
                 "input": body.dict(by_alias=True),
                 "tema_vis": tema_vis,
                 "payload_ai": payload_ai,
                 "result": {
-                    "error": out.get("error") or ("Risposta vuota" if not raw_text else "JSON non valido"),
+                    "error": "JSON non valido" if raw_text else "Risposta vuota",
                     "parse_error": parse_error,
                     "raw_preview": raw_text[:500],
                     "content": None,
@@ -342,19 +352,16 @@ def tema_ai_endpoint(
         # ====================================================
         # 5) Parse JSON dall'AI
         # ====================================================
-        # Manteniamo questo blocco (come richiesto), ma EVITIAMO di sovrascrivere
-        # parsed/parse_error che arrivano già dal nuovo wrapper (out["content"]).
-        #
-        # Lo usiamo solo come DIAGNOSTICA locale (non influisce sulla risposta).
+        # Manteniamo questo blocco (come richiesto), ma NON influisce sulla risposta:
+        # serve solo come diagnostica su raw_text.
         parsed_from_raw: Optional[Dict[str, Any]] = None
         parse_error_from_raw: Optional[str] = None
         try:
             if raw_text:
-                parsed_from_raw = json.loads(raw_text)  # potrebbe fallire se ci sono fence/backticks
+                parsed_from_raw = json.loads(raw_text)  # può fallire per ```json ... ```
         except Exception as e:
             parse_error_from_raw = str(e)
 
-        # Se vuoi, puoi esporre diagnostica nel debug senza cambiare il comportamento:
         try:
             if isinstance(ai_debug.get("ai_debug"), dict):
                 ai_debug["ai_debug"]["raw_parse_diag"] = {
