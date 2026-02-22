@@ -231,9 +231,6 @@ def tema_ai_endpoint(
         out = call_claude_tema_ai(payload_ai, tier=body.tier)
 
         # ====================================================
-        # ✅ FIX SHAPE: nuovo wrapper ritorna {"result": <json> | {"error":..}, "ai_debug": {...}}
-        # ====================================================
-        # ====================================================
         # ✅ FIX SHAPE: wrapper può tornare result come dict oppure string JSON
         # ====================================================
         ai_dbg = out.get("ai_debug") or {}
@@ -244,23 +241,36 @@ def tema_ai_endpoint(
         parsed: Optional[Dict[str, Any]] = None
         parse_error: Optional[str] = None
 
+        # 0) Unwrap: se per caso result è un envelope {"result": {...}, "ai_debug": {...}}
+        if isinstance(r, dict) and "result" in r and (
+            "ai_debug" in r or "error" in r or "parse_error" in r
+        ):
+            r = r.get("result")
+
         # 1) wrapper ha segnalato errore (result è un dict con chiave "error")
         if isinstance(r, dict) and r.get("error"):
             parsed = None
-            parse_error = r.get("parse_error") or r.get("detail") or None
+            parse_error = r.get("parse_error") or r.get("detail") or r.get("error")
 
         else:
             # 2) caso OK: result dovrebbe essere dict
             if isinstance(r, dict):
                 parsed = r
+                parse_error = None
 
             # 3) caso anomalo ma comune: result è una stringa contenente JSON
             elif isinstance(r, str) and r.strip():
                 try:
                     tmp = json.loads(r)
-                    parsed = tmp if isinstance(tmp, dict) else None
-                    if parsed is None:
-                        parse_error = f"result è JSON ma non dict (type={type(tmp).__name__})"
+                    if isinstance(tmp, dict) and not tmp.get("error"):
+                        parsed = tmp
+                        parse_error = None
+                    else:
+                        parsed = None
+                        if isinstance(tmp, dict):
+                            parse_error = tmp.get("parse_error") or tmp.get("detail") or tmp.get("error") or "JSON non valido"
+                        else:
+                            parse_error = "Risposta non in formato JSON (dict)."
                 except Exception as e:
                     parsed = None
                     parse_error = f"result string non parseabile: {e}"
@@ -273,6 +283,7 @@ def tema_ai_endpoint(
             "result": parsed,
             "ai_debug": ai_dbg,
         }
+
         # ====================================================
         # 3b) LOGGING USAGE (usage_logs)
         # ====================================================
@@ -339,11 +350,11 @@ def tema_ai_endpoint(
         # ====================================================
         # 4) Caso: Claude non ha risposto / JSON non valido
         # ====================================================
-        # NB: nessun fallback (come richiesto). Restituiamo status ok con result.error valorizzato.
         if parsed is None:
             return {
-                "status": "ok",
+                "status": "error",
                 "scope": "tema_ai",
+                "message": "JSON non valido" if raw_text else "Claude non ha restituito testo.",
                 "input": body.dict(by_alias=True),
                 "tema_vis": tema_vis,
                 "payload_ai": payload_ai,
@@ -370,13 +381,12 @@ def tema_ai_endpoint(
         # ====================================================
         # 5) Parse JSON dall'AI
         # ====================================================
-        # Manteniamo questo blocco (come richiesto), ma NON influisce sulla risposta:
-        # serve solo come diagnostica su raw_text.
+        # Manteniamo questo blocco come diagnostica, senza sovrascrivere parsed/parse_error.
         parsed_from_raw: Optional[Dict[str, Any]] = None
         parse_error_from_raw: Optional[str] = None
         try:
             if raw_text:
-                parsed_from_raw = json.loads(raw_text)  # può fallire per ```json ... ```
+                parsed_from_raw = json.loads(raw_text)
         except Exception as e:
             parse_error_from_raw = str(e)
 
