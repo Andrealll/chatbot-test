@@ -230,13 +230,16 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        ai_debug = call_claude_tema_ai(payload_ai, tier=body.tier)
+        out = call_claude_tema_ai(payload_ai, tier=body.tier)
 
-        raw = (
-            ai_debug.get("raw_text")
-            or (ai_debug.get("ai_debug") or {}).get("raw_text")
-            or ""
-        )
+        raw = (out.get("ai_debug") or {}).get("raw_text") or ""
+        parsed = out.get("content")
+        parse_error = out.get("parse_error")
+
+        ai_debug = {
+            "result": parsed,
+            "ai_debug": out.get("ai_debug"),
+}
 
         # ====================================================
         # 3b) LOGGING USAGE (usage_logs) – SOLO SUCCESSO
