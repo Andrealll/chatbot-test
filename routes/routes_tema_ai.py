@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Dict, Any, Optional, List, Literal
+from typing import Dict, Any, Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
@@ -37,7 +37,6 @@ TEMA_AI_PREMIUM_COST = 2  # se domani vuoi 3/5 ecc, cambi solo qui
 #  Request model
 # ==========================
 class TemaAIRequest(BaseModel):
-    # il frontend manda data_nascita / ora_nascita → usiamo alias
     citta: str
     data: str = Field(..., alias="data_nascita")          # "YYYY-MM-DD"
     ora: Optional[str] = Field(None, alias="ora_nascita") # "HH:MM" o vuota
@@ -77,7 +76,6 @@ def tema_ai_endpoint(
     client_session = request.headers.get("x-client-session")
 
     request_log_base: Dict[str, Any] = {
-        # uso by_alias=True così nel log vedi data_nascita/ora_nascita
         "body": body.dict(by_alias=True),
         "client_source": client_source,
         "client_session": client_session,
@@ -86,6 +84,9 @@ def tema_ai_endpoint(
     state = None
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
+
+    # >>> NEW: tier effettivo usato dall'AI (NON tocca credits_logic)
+    effective_tier: Literal["free", "premium"] = "free"
 
     paid_credits_before: Optional[int] = None
     paid_credits_after: Optional[int] = None
@@ -131,9 +132,22 @@ def tema_ai_endpoint(
             billing_mode = "free"
 
         # ====================================================
+        # 0b) EFFECTIVE TIER (solo per chiamata AI)
+        # - Se chiedi premium ma non hai copertura (es: free_credit con paid_credits insufficienti),
+        #   NON chiedere premium a Claude (evita output tronco a 4096).
+        # ====================================================
+        effective_tier = "premium" if body.tier == "premium" else "free"
+
+        if body.tier == "premium" and billing_mode == "free_credit":
+            # NOTA: qui usi paid_credits come fai già in billing.remaining_credits
+            if state is not None and getattr(state, "paid_credits", 0) < TEMA_AI_PREMIUM_COST:
+                effective_tier = "free"
+
+        if body.tier == "premium" and billing_mode == "error":
+            effective_tier = "free"
+
+        # ====================================================
         # 1) Calcolo tema natale
-        #    → costruisci_tema_natale gestisce internamente ora_ignota:
-        #      - se ora_nascita None/"" → niente ASC / case / asc_ruler
         # ====================================================
         ora_raw = (body.ora or "").strip()
         ora_for_tema = None if body.ora_ignota or not ora_raw else ora_raw
@@ -145,11 +159,8 @@ def tema_ai_endpoint(
                 ora_nascita=ora_for_tema,
                 sistema_case="equal",
             )
-            # allineo comunque il flag, nel caso serva altrove
             tema_input = tema.get("input") or {}
-            tema_input["ora_ignota"] = body.ora_ignota or tema_input.get(
-                "ora_ignota", False
-            )
+            tema_input["ora_ignota"] = body.ora_ignota or tema_input.get("ora_ignota", False)
             tema["input"] = tema_input
 
         except Exception as e:
@@ -169,7 +180,7 @@ def tema_ai_endpoint(
 
             tema_vis: Dict[str, Any] = {}
 
-            # PNG ruota-only (usa anche gli aspetti per disegno interno)
+            # PNG ruota-only
             try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
@@ -178,12 +189,9 @@ def tema_ai_endpoint(
                 )
                 tema_vis["chart_png_base64"] = chart_png_base64
             except Exception as ge:
-                logger.exception(
-                    "[TEMA_AI] Errore nella generazione del grafico tema con aspetti: %r",
-                    ge,
-                )
+                logger.exception("[TEMA_AI] Errore grafico tema: %r", ge)
 
-            # Payload testuale per frontend (Pianeti + Aspetti)
+            # Payload testuale
             try:
                 text_payload = build_tema_text_payload(
                     pianeti_decod=pianeti_decod,
@@ -193,10 +201,7 @@ def tema_ai_endpoint(
                 tema_vis["pianeti"] = text_payload.get("pianeti", [])
                 tema_vis["aspetti"] = text_payload.get("aspetti", [])
             except Exception as te:
-                logger.exception(
-                    "[TEMA_AI] Errore nella costruzione del payload testuale tema_vis: %r",
-                    te,
-                )
+                logger.exception("[TEMA_AI] Errore payload testuale tema_vis: %r", te)
 
         except HTTPException:
             raise
@@ -208,7 +213,7 @@ def tema_ai_endpoint(
             )
 
         # ====================================================
-        # 2) Build payload AI
+        # 2) Build payload AI (usa effective_tier)
         # ====================================================
         try:
             payload_ai = build_payload_tema_ai(
@@ -216,19 +221,19 @@ def tema_ai_endpoint(
                 nome=body.nome,
                 email=body.email,
                 domanda=body.domanda,
-                tier=body.tier,  # "free" o "premium" influenza il prompt
+                tier=effective_tier,
             )
         except Exception as e:
-            logger.exception("[TEMA_AI] Errore nella costruzione del payload AI")
+            logger.exception("[TEMA_AI] Errore build payload AI")
             raise HTTPException(
                 status_code=500,
                 detail=f"Errore nella costruzione del payload AI: {e}",
             )
 
         # ====================================================
-        # 3) Chiamata Claude
+        # 3) Chiamata Claude (usa effective_tier)
         # ====================================================
-        out = call_claude_tema_ai(payload_ai, tier=body.tier)
+        out = call_claude_tema_ai(payload_ai, tier=effective_tier)
 
         # ====================================================
         # ✅ FIX SHAPE: wrapper può tornare result come dict oppure string JSON
@@ -242,23 +247,19 @@ def tema_ai_endpoint(
         parse_error: Optional[str] = None
 
         # 0) Unwrap: se per caso result è un envelope {"result": {...}, "ai_debug": {...}}
-        if isinstance(r, dict) and "result" in r and (
-            "ai_debug" in r or "error" in r or "parse_error" in r
-        ):
+        if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
             r = r.get("result")
 
-        # 1) wrapper ha segnalato errore (result è un dict con chiave "error")
+        # 1) wrapper ha segnalato errore
         if isinstance(r, dict) and r.get("error"):
             parsed = None
             parse_error = r.get("parse_error") or r.get("detail") or r.get("error")
-
         else:
             # 2) caso OK: result dovrebbe essere dict
             if isinstance(r, dict):
                 parsed = r
                 parse_error = None
-
-            # 3) caso anomalo ma comune: result è una stringa contenente JSON
+            # 3) caso anomalo: string JSON
             elif isinstance(r, str) and r.strip():
                 try:
                     tmp = json.loads(r)
@@ -274,7 +275,6 @@ def tema_ai_endpoint(
                 except Exception as e:
                     parsed = None
                     parse_error = f"result string non parseabile: {e}"
-
             else:
                 parsed = None
                 parse_error = f"Risposta non in formato JSON (dict). type={type(r).__name__}"
@@ -318,17 +318,14 @@ def tema_ai_endpoint(
 
         request_log_success = {
             **request_log_base,
-            "ai_call": {
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-            },
+            "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
         }
 
         try:
             log_usage_event(
                 user_id=user.sub,
                 feature=TEMA_AI_FEATURE_KEY,
-                tier=body.tier,
+                tier=body.tier,  # tier richiesto (come prima)
                 role=role,
                 is_guest=is_guest,
                 billing_mode=billing_mode,
@@ -354,6 +351,8 @@ def tema_ai_endpoint(
             return {
                 "status": "error",
                 "scope": "tema_ai",
+                "requested_tier": body.tier,
+                "effective_tier": effective_tier,
                 "message": "JSON non valido" if raw_text else "Claude non ha restituito testo.",
                 "input": body.dict(by_alias=True),
                 "tema_vis": tema_vis,
@@ -367,9 +366,7 @@ def tema_ai_endpoint(
                 "ai_debug": ai_debug,
                 "billing": {
                     "mode": billing_mode,
-                    "remaining_credits": (
-                        state.paid_credits if state is not None else None
-                    ),
+                    "remaining_credits": (state.paid_credits if state is not None else None),
                     "cost_credits": (
                         TEMA_AI_PREMIUM_COST
                         if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
@@ -379,9 +376,8 @@ def tema_ai_endpoint(
             }
 
         # ====================================================
-        # 5) Parse JSON dall'AI
+        # 5) Parse JSON dall'AI (diagnostica su raw_text)
         # ====================================================
-        # Manteniamo questo blocco come diagnostica, senza sovrascrivere parsed/parse_error.
         parsed_from_raw: Optional[Dict[str, Any]] = None
         parse_error_from_raw: Optional[str] = None
         try:
@@ -405,8 +401,10 @@ def tema_ai_endpoint(
         return {
             "status": "ok",
             "scope": "tema_ai",
+            "requested_tier": body.tier,
+            "effective_tier": effective_tier,
             "input": body.dict(by_alias=True),
-            "tema_vis": tema_vis,        # PNG + pianeti/aspetti testuali
+            "tema_vis": tema_vis,
             "payload_ai": payload_ai,
             "result": {
                 "error": None,
@@ -416,10 +414,8 @@ def tema_ai_endpoint(
             },
             "ai_debug": ai_debug,
             "billing": {
-                "mode": billing_mode,  # "free", "paid" o "free_credit"
-                "remaining_credits": (
-                    state.paid_credits if state is not None else None
-                ),
+                "mode": billing_mode,
+                "remaining_credits": (state.paid_credits if state is not None else None),
                 "cost_credits": (
                     TEMA_AI_PREMIUM_COST
                     if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
@@ -436,7 +432,7 @@ def tema_ai_endpoint(
             log_usage_event(
                 user_id=user.sub,
                 feature=TEMA_AI_FEATURE_KEY,
-                tier=body.tier,
+                tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
                 billing_mode="error",
@@ -449,9 +445,7 @@ def tema_ai_endpoint(
                 paid_credits_before=paid_credits_before,
                 paid_credits_after=(state.paid_credits if state is not None else None),
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(
-                    state.free_tries_used if state is not None else None
-                ),
+                free_credits_used_after=(state.free_tries_used if state is not None else None),
                 request_json={
                     **request_log_base,
                     "error": {
@@ -462,10 +456,7 @@ def tema_ai_endpoint(
                 },
             )
         except Exception as log_err:
-            logger.exception(
-                "[TEMA_AI] log_usage_event error (HTTPException): %r",
-                log_err,
-            )
+            logger.exception("[TEMA_AI] log_usage_event error (HTTPException): %r", log_err)
         raise
 
     except Exception as exc:
@@ -474,7 +465,7 @@ def tema_ai_endpoint(
             log_usage_event(
                 user_id=user.sub,
                 feature=TEMA_AI_FEATURE_KEY,
-                tier=body.tier,
+                tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
                 billing_mode="error",
@@ -487,9 +478,7 @@ def tema_ai_endpoint(
                 paid_credits_before=paid_credits_before,
                 paid_credits_after=(state.paid_credits if state is not None else None),
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(
-                    state.free_tries_used if state is not None else None
-                ),
+                free_credits_used_after=(state.free_tries_used if state is not None else None),
                 request_json={
                     **request_log_base,
                     "error": {
@@ -499,8 +488,5 @@ def tema_ai_endpoint(
                 },
             )
         except Exception as log_err:
-            logger.exception(
-                "[TEMA_AI] log_usage_event error (unexpected): %r",
-                log_err,
-            )
+            logger.exception("[TEMA_AI] log_usage_event error (unexpected): %r", log_err)
         raise
