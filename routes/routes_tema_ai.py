@@ -12,7 +12,7 @@ from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
 from astrobot_core.payload_tema_ai import build_payload_tema_ai
 
-# --- IMPORT PER AUTH + CREDITI ---
+# --- AUTH + CREDITI ---
 from auth import get_current_user, UserContext
 from astrobot_auth.credits_logic import (
     load_user_credits_state,
@@ -27,14 +27,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ==========================
-#  Costi in crediti (parametrici)
+# Costi
 # ==========================
 TEMA_AI_FEATURE_KEY = "tema_ai"
-TEMA_AI_PREMIUM_COST = 2  # se domani vuoi 3/5 ecc, cambi solo qui
+TEMA_AI_PREMIUM_COST = 2
 
 
 # ==========================
-#  Request model
+# Request model
 # ==========================
 class TemaAIRequest(BaseModel):
     citta: str
@@ -50,26 +50,13 @@ class TemaAIRequest(BaseModel):
         allow_population_by_field_name = True
 
 
-# ==========================
-#  ROUTE PRINCIPALE
-# ==========================
 @router.post("/tema_ai")
 def tema_ai_endpoint(
     body: TemaAIRequest,
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
-    """
-    0) Gating crediti SOLO se tier == "premium"
-    1) Calcolo tema natale (usa costruisci_tema_natale che gestisce ora_ignota)
-    2) Build payload_vis (PNG + liste testuali) dal CORE
-    3) Build payload_ai
-    4) Chiamata Claude
-    5) Logging usage
-    6) Risposta finale con blocco billing
-    """
-
-    is_guest = user.sub.startswith("anon-")
+    is_guest = bool(getattr(user, "sub", "")).startswith("anon-")
     role = getattr(user, "role", None)
 
     client_source = request.headers.get("x-client-source") or "unknown"
@@ -85,9 +72,6 @@ def tema_ai_endpoint(
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
 
-    # >>> NEW: tier effettivo usato dall'AI (NON tocca credits_logic)
-    effective_tier: Literal["free", "premium"] = "free"
-
     paid_credits_before: Optional[int] = None
     paid_credits_after: Optional[int] = None
     free_credits_used_before: Optional[int] = None
@@ -95,7 +79,7 @@ def tema_ai_endpoint(
 
     try:
         # ====================================================
-        # 0) STATO CREDITI + GATING (consumo solo PREMIUM)
+        # 0) Crediti + gating (consumo solo premium)
         # ====================================================
         state = load_user_credits_state(user)
 
@@ -127,27 +111,11 @@ def tema_ai_endpoint(
             else:
                 billing_mode = "error"
         else:
-            # tier free: nessun consumo, ma salviamo comunque lo stato (es. last_seen)
             save_user_credits_state(state)
             billing_mode = "free"
 
         # ====================================================
-        # 0b) EFFECTIVE TIER (solo per chiamata AI)
-        # - Se chiedi premium ma non hai copertura (es: free_credit con paid_credits insufficienti),
-        #   NON chiedere premium a Claude (evita output tronco a 4096).
-        # ====================================================
-        effective_tier = "premium" if body.tier == "premium" else "free"
-
-        if body.tier == "premium" and billing_mode == "free_credit":
-            # NOTA: qui usi paid_credits come fai già in billing.remaining_credits
-            if state is not None and getattr(state, "paid_credits", 0) < TEMA_AI_PREMIUM_COST:
-                effective_tier = "free"
-
-        if body.tier == "premium" and billing_mode == "error":
-            effective_tier = "free"
-
-        # ====================================================
-        # 1) Calcolo tema natale
+        # 1) Calcolo tema natale (ora ignota)
         # ====================================================
         ora_raw = (body.ora or "").strip()
         ora_for_tema = None if body.ora_ignota or not ora_raw else ora_raw
@@ -160,18 +128,14 @@ def tema_ai_endpoint(
                 sistema_case="equal",
             )
             tema_input = tema.get("input") or {}
-            tema_input["ora_ignota"] = body.ora_ignota or tema_input.get("ora_ignota", False)
+            tema_input["ora_ignota"] = bool(body.ora_ignota or tema_input.get("ora_ignota", False))
             tema["input"] = tema_input
-
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nel calcolo del tema natale")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Errore nel calcolo del tema natale: {e}",
-            )
+            raise HTTPException(status_code=500, detail=f"Errore nel calcolo del tema natale: {e}")
 
         # ====================================================
-        # 1b) Costruzione payload VISIVO (tema_vis)
+        # 1b) Payload visivo (tema_vis)
         # ====================================================
         try:
             pianeti_decod = tema.get("pianeti_decod") or {}
@@ -180,7 +144,6 @@ def tema_ai_endpoint(
 
             tema_vis: Dict[str, Any] = {}
 
-            # PNG ruota-only
             try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
@@ -191,7 +154,6 @@ def tema_ai_endpoint(
             except Exception as ge:
                 logger.exception("[TEMA_AI] Errore grafico tema: %r", ge)
 
-            # Payload testuale
             try:
                 text_payload = build_tema_text_payload(
                     pianeti_decod=pianeti_decod,
@@ -203,43 +165,32 @@ def tema_ai_endpoint(
             except Exception as te:
                 logger.exception("[TEMA_AI] Errore payload testuale tema_vis: %r", te)
 
-        except HTTPException:
-            raise
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Errore nella costruzione del payload visivo del tema: {e}",
-            )
+            raise HTTPException(status_code=500, detail=f"Errore nella costruzione del tema_vis: {e}")
 
         # ====================================================
-        # 2) Build payload AI (usa effective_tier)
+        # 2) Payload AI
         # ====================================================
         try:
-            logger.warning("[TEMA_AI][TIER_TRACE] body.tier=%r", body.tier)
             payload_ai = build_payload_tema_ai(
                 tema=tema,
                 nome=body.nome,
                 email=body.email,
                 domanda=body.domanda,
-                tier=effective_tier,
+                tier=body.tier,
             )
-        logger.warning("[TEMA_AI][TIER_TRACE] payload_ai.meta.tier=%r", (payload_ai.get("meta") or {}).get("tier"))    
         except Exception as e:
             logger.exception("[TEMA_AI] Errore build payload AI")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Errore nella costruzione del payload AI: {e}",
-            )
+            raise HTTPException(status_code=500, detail=f"Errore build payload AI: {e}")
 
         # ====================================================
-        # 3) Chiamata Claude (usa effective_tier)
+        # 3) Chiamata Claude
         # ====================================================
-        logger.warning("[TEMA_AI][TIER_TRACE] calling_claude tier_arg=%r", body.tier)
-        out = call_claude_tema_ai(payload_ai, tier=effective_tier)
+        out = call_claude_tema_ai(payload_ai, tier=body.tier)
 
         # ====================================================
-        # ✅ FIX SHAPE: wrapper può tornare result come dict oppure string JSON
+        # 3a) Parse/shape robusto
         # ====================================================
         ai_dbg = out.get("ai_debug") or {}
         raw_text = ai_dbg.get("raw_text") or ""
@@ -249,26 +200,20 @@ def tema_ai_endpoint(
         parsed: Optional[Dict[str, Any]] = None
         parse_error: Optional[str] = None
 
-        # 0) Unwrap: se per caso result è un envelope {"result": {...}, "ai_debug": {...}}
         if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
             r = r.get("result")
 
-        # 1) wrapper ha segnalato errore
         if isinstance(r, dict) and r.get("error"):
             parsed = None
             parse_error = r.get("parse_error") or r.get("detail") or r.get("error")
         else:
-            # 2) caso OK: result dovrebbe essere dict
             if isinstance(r, dict):
                 parsed = r
-                parse_error = None
-            # 3) caso anomalo: string JSON
             elif isinstance(r, str) and r.strip():
                 try:
                     tmp = json.loads(r)
                     if isinstance(tmp, dict) and not tmp.get("error"):
                         parsed = tmp
-                        parse_error = None
                     else:
                         parsed = None
                         if isinstance(tmp, dict):
@@ -282,28 +227,25 @@ def tema_ai_endpoint(
                 parsed = None
                 parse_error = f"Risposta non in formato JSON (dict). type={type(r).__name__}"
 
-        ai_debug = {
-            "result": parsed,
-            "ai_debug": ai_dbg,
-        }
+        ai_debug = {"result": parsed, "ai_debug": ai_dbg}
 
         # ====================================================
-        # 3b) LOGGING USAGE (usage_logs)
+        # 3b) Usage extract
         # ====================================================
+        usage = {}
         try:
-            usage = (ai_debug.get("ai_debug") or {}).get("usage") or {}
+            usage = (ai_dbg.get("usage") or {}) if isinstance(ai_dbg, dict) else {}
         except Exception:
             usage = {}
 
-        tokens_in = usage.get("input_tokens", 0) or 0
-        tokens_out = usage.get("output_tokens", 0) or 0
+        tokens_in = int(usage.get("input_tokens", 0) or 0)
+        tokens_out = int(usage.get("output_tokens", 0) or 0)
 
         model = None
         latency_ms: Optional[float] = None
         try:
-            inner = ai_debug.get("ai_debug") or {}
-            model = inner.get("model")
-            elapsed_sec = inner.get("elapsed_sec")
+            model = ai_dbg.get("model") if isinstance(ai_dbg, dict) else None
+            elapsed_sec = ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None
             if isinstance(elapsed_sec, (int, float)):
                 latency_ms = float(elapsed_sec) * 1000.0
         except Exception:
@@ -312,23 +254,20 @@ def tema_ai_endpoint(
 
         cost_paid_credits = 0
         cost_free_credits = 0
-
         if body.tier == "premium" and decision is not None:
             if decision.mode == "paid":
                 cost_paid_credits = TEMA_AI_PREMIUM_COST
             elif decision.mode == "free_credit":
                 cost_free_credits = TEMA_AI_PREMIUM_COST
 
-        request_log_success = {
-            **request_log_base,
-            "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
-        }
-
+        # ====================================================
+        # 3c) Log usage SUCCESS
+        # ====================================================
         try:
             log_usage_event(
                 user_id=user.sub,
                 feature=TEMA_AI_FEATURE_KEY,
-                tier=body.tier,  # tier richiesto (come prima)
+                tier=body.tier,
                 role=role,
                 is_guest=is_guest,
                 billing_mode=billing_mode,
@@ -339,23 +278,21 @@ def tema_ai_endpoint(
                 model=model,
                 latency_ms=latency_ms,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=paid_credits_after,
+                paid_credits_after=(state.paid_credits if state is not None else None),
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=free_credits_used_after,
-                request_json=request_log_success,
+                free_credits_used_after=(state.free_tries_used if state is not None else None),
+                request_json={**request_log_base, "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out}},
             )
         except Exception as e:
             logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
 
         # ====================================================
-        # 4) Caso: Claude non ha risposto / JSON non valido
+        # 4) JSON non valido / vuoto
         # ====================================================
         if parsed is None:
             return {
                 "status": "error",
                 "scope": "tema_ai",
-                "requested_tier": body.tier,
-                "effective_tier": effective_tier,
                 "message": "JSON non valido" if raw_text else "Claude non ha restituito testo.",
                 "input": body.dict(by_alias=True),
                 "tema_vis": tema_vis,
@@ -375,37 +312,17 @@ def tema_ai_endpoint(
                         if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
                         else 0
                     ),
+                    "cost_paid_credits": cost_paid_credits,
+                    "cost_free_credits": cost_free_credits,
                 },
             }
 
         # ====================================================
-        # 5) Parse JSON dall'AI (diagnostica su raw_text)
-        # ====================================================
-        parsed_from_raw: Optional[Dict[str, Any]] = None
-        parse_error_from_raw: Optional[str] = None
-        try:
-            if raw_text:
-                parsed_from_raw = json.loads(raw_text)
-        except Exception as e:
-            parse_error_from_raw = str(e)
-
-        try:
-            if isinstance(ai_debug.get("ai_debug"), dict):
-                ai_debug["ai_debug"]["raw_parse_diag"] = {
-                    "parsed_from_raw_is_none": parsed_from_raw is None,
-                    "parse_error_from_raw": parse_error_from_raw,
-                }
-        except Exception:
-            pass
-
-        # ====================================================
-        # 6) Risposta finale
+        # 5) OK
         # ====================================================
         return {
             "status": "ok",
             "scope": "tema_ai",
-            "requested_tier": body.tier,
-            "effective_tier": effective_tier,
             "input": body.dict(by_alias=True),
             "tema_vis": tema_vis,
             "payload_ai": payload_ai,
@@ -424,13 +341,13 @@ def tema_ai_endpoint(
                     if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
                     else 0
                 ),
+                "cost_paid_credits": cost_paid_credits,
+                "cost_free_credits": cost_free_credits,
             },
         }
 
-    # ====================================================
-    # 7) LOG TENTATIVI FALLITI
-    # ====================================================
     except HTTPException as exc:
+        # log fallimento HTTPException
         try:
             log_usage_event(
                 user_id=user.sub,
@@ -451,11 +368,7 @@ def tema_ai_endpoint(
                 free_credits_used_after=(state.free_tries_used if state is not None else None),
                 request_json={
                     **request_log_base,
-                    "error": {
-                        "type": "http_exception",
-                        "status_code": exc.status_code,
-                        "detail": exc.detail,
-                    },
+                    "error": {"type": "http_exception", "status_code": exc.status_code, "detail": exc.detail},
                 },
             )
         except Exception as log_err:
@@ -484,10 +397,7 @@ def tema_ai_endpoint(
                 free_credits_used_after=(state.free_tries_used if state is not None else None),
                 request_json={
                     **request_log_base,
-                    "error": {
-                        "type": "unexpected_exception",
-                        "detail": str(exc),
-                    },
+                    "error": {"type": "unexpected_exception", "detail": str(exc)},
                 },
             )
         except Exception as log_err:
