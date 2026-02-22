@@ -233,6 +233,9 @@ def tema_ai_endpoint(
         # ====================================================
         # ✅ FIX SHAPE: nuovo wrapper ritorna {"result": <json> | {"error":..}, "ai_debug": {...}}
         # ====================================================
+        # ====================================================
+        # ✅ FIX SHAPE: wrapper può tornare result come dict oppure string JSON
+        # ====================================================
         ai_dbg = out.get("ai_debug") or {}
         raw_text = ai_dbg.get("raw_text") or ""
 
@@ -241,20 +244,35 @@ def tema_ai_endpoint(
         parsed: Optional[Dict[str, Any]] = None
         parse_error: Optional[str] = None
 
+        # 1) wrapper ha segnalato errore (result è un dict con chiave "error")
         if isinstance(r, dict) and r.get("error"):
-            # wrapper ha segnalato errore/parse_error
             parsed = None
             parse_error = r.get("parse_error") or r.get("detail") or None
+
         else:
-            # caso OK: r è già il JSON interpretazione
-            parsed = r if isinstance(r, dict) else None
-            parse_error = None if parsed is not None else "Risposta non in formato JSON (dict)."
+            # 2) caso OK: result dovrebbe essere dict
+            if isinstance(r, dict):
+                parsed = r
+
+            # 3) caso anomalo ma comune: result è una stringa contenente JSON
+            elif isinstance(r, str) and r.strip():
+                try:
+                    tmp = json.loads(r)
+                    parsed = tmp if isinstance(tmp, dict) else None
+                    if parsed is None:
+                        parse_error = f"result è JSON ma non dict (type={type(tmp).__name__})"
+                except Exception as e:
+                    parsed = None
+                    parse_error = f"result string non parseabile: {e}"
+
+            else:
+                parsed = None
+                parse_error = f"Risposta non in formato JSON (dict). type={type(r).__name__}"
 
         ai_debug = {
             "result": parsed,
             "ai_debug": ai_dbg,
         }
-
         # ====================================================
         # 3b) LOGGING USAGE (usage_logs)
         # ====================================================
