@@ -216,6 +216,7 @@ def tema_ai_endpoint(
         # 2) Build payload AI (usa effective_tier)
         # ====================================================
         try:
+            logger.warning("[TEMA_AI][TIER_TRACE] body.tier=%r", body.tier)
             payload_ai = build_payload_tema_ai(
                 tema=tema,
                 nome=body.nome,
@@ -223,6 +224,7 @@ def tema_ai_endpoint(
                 domanda=body.domanda,
                 tier=effective_tier,
             )
+        logger.warning("[TEMA_AI][TIER_TRACE] payload_ai.meta.tier=%r", (payload_ai.get("meta") or {}).get("tier"))    
         except Exception as e:
             logger.exception("[TEMA_AI] Errore build payload AI")
             raise HTTPException(
@@ -233,6 +235,7 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude (usa effective_tier)
         # ====================================================
+        logger.warning("[TEMA_AI][TIER_TRACE] calling_claude tier_arg=%r", body.tier)
         out = call_claude_tema_ai(payload_ai, tier=effective_tier)
 
         # ====================================================
