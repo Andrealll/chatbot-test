@@ -1,86 +1,69 @@
 from typing import Optional
+import os
+import uuid
 
-import base64
-import json
-import uuid  # <-- AGGIUNTO
-
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
-# FastAPI leggerà il Bearer token da Authorization: Bearer <token>
-# auto_error=False -> se NON c'è Authorization non lancia 401 da solo,
-# ma passa None a get_current_user
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="token-not-used-here",
-    auto_error=False,  # <-- AGGIUNTO
+    auto_error=False,
 )
 
+ISSUER = os.getenv("AUTH_ISSUER", "astrobot-auth-pub")
+AUDIENCE = os.getenv("AUTH_AUDIENCE", "chatbot-test")
+
+def _load_public_key() -> bytes:
+    pem = os.getenv("AUTH_PUBLIC_KEY_PEM")
+    if pem:
+        return pem.encode("utf-8")
+    path = os.getenv("AUTH_PUBLIC_KEY_PATH", "secrets/jwtRS256.key.pub")
+    try:
+        return open(path, "rb").read()
+    except Exception as e:
+        raise RuntimeError(f"Missing public key file at {path}: {e}")
+
+PUBLIC_KEY = _load_public_key()
 
 class UserContext(BaseModel):
     sub: str
     role: str = "free"
 
-
-def _decode_segment(seg: str) -> bytes:
-    """
-    Decodifica una singola parte base64url di un JWT (header/payload).
-    Aggiunge il padding '=' se necessario.
-    """
-    padding = "=" * (-len(seg) % 4)
-    return base64.urlsafe_b64decode(seg + padding)
-
-
-def decode_token(token: str) -> UserContext:
-    """
-    Decodifica il JWT emesso da astrobot_auth SENZA verificare la firma.
-
-    Ci interessa solo leggere:
-      - sub  -> identificativo utente
-      - role -> "free" | "premium"
-    """
-    # 1) Controllo formato base del token
+def decode_token_verified(token: str) -> UserContext:
     try:
-        header_b64, payload_b64, sig_b64 = token.split(".")
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token non valido (formato)",
+        data = jwt.decode(
+            token,
+            key=PUBLIC_KEY,
+            algorithms=["RS256"],
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            options={
+                "require": ["sub", "iss", "aud", "iat", "exp"],
+                "verify_exp": True,
+            },
+            leeway=30,
         )
-
-    # 2) Decodifica del payload
-    try:
-        payload_bytes = _decode_segment(payload_b64)
-        data = json.loads(payload_bytes.decode("utf-8"))
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token non valido (payload)",
-        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except jwt.PyJWTError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}")
 
     sub = data.get("sub")
-    role = data.get("role", "free")
-
+    role = data.get("role", "free") or "free"
     if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token senza 'sub'",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token without sub")
 
     return UserContext(sub=sub, role=role)
 
-
 async def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),  # <-- ora può essere None
+    token: Optional[str] = Depends(oauth2_scheme),
 ) -> UserContext:
-    """
-    Dependency FastAPI: estrae l'utente corrente dal token Bearer.
-    Se il token non c'è -> guest anonimo (free).
-    """
-    # Nessun Authorization -> utente guest
     if not token:
-        anon_id = f"anon-{uuid.uuid4()}"
-        return UserContext(sub=anon_id, role="free")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing token (anonymous login required)",
+        )
 
-    # Con il token, si usa la logica esistente
-    return decode_token(token)
+    return decode_token_verified(token)

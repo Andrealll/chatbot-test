@@ -91,17 +91,6 @@ def tema_ai_endpoint(
         if body.tier == "premium":
             decision = decide_premium_mode(state)
 
-            apply_premium_consumption(
-                state,
-                decision,
-                feature_cost=TEMA_AI_PREMIUM_COST,
-            )
-
-            save_user_credits_state(state)
-
-            paid_credits_after = state.paid_credits
-            free_credits_used_after = state.free_tries_used
-
             if decision.mode == "paid":
                 billing_mode = "paid"
             elif decision.mode == "free_credit":
@@ -111,7 +100,6 @@ def tema_ai_endpoint(
             else:
                 billing_mode = "error"
         else:
-            save_user_credits_state(state)
             billing_mode = "free"
 
         # ====================================================
@@ -316,7 +304,16 @@ def tema_ai_endpoint(
                     "cost_free_credits": cost_free_credits,
                 },
             }
+        if body.tier == "premium" and decision is not None:
+            apply_premium_consumption(
+                state,
+                decision,
+                feature_cost=TEMA_AI_PREMIUM_COST,
+            )
+            save_user_credits_state(state)
 
+            paid_credits_after = state.paid_credits
+            free_credits_used_after = state.free_tries_used
         # ====================================================
         # 5) OK
         # ====================================================

@@ -112,17 +112,6 @@ async def sinastria_ai_endpoint(
         if body.tier == "premium":
             decision = decide_premium_mode(state)
 
-            apply_premium_consumption(
-                state,
-                decision,
-                feature_cost=SINASTRIA_PREMIUM_COST,
-            )
-
-            save_user_credits_state(state)
-
-            paid_credits_after = state.paid_credits
-            free_credits_used_after = state.free_tries_used
-
             if decision.mode == "paid":
                 billing_mode = "paid"
             elif decision.mode == "free_credit":
@@ -132,10 +121,7 @@ async def sinastria_ai_endpoint(
             else:
                 billing_mode = "error"
         else:
-            # tier free: nessun consumo, ma salviamo comunque lo stato (es. last_seen)
-            save_user_credits_state(state)
             billing_mode = "free"
-
         # ====================================================
         # 1) Parsing datetime (solo validazione formato) + supporto ora ignota
         # ====================================================
@@ -486,7 +472,16 @@ async def sinastria_ai_endpoint(
         # 3) Chiamata Claude
         # ====================================================
         sinastria_ai = call_claude_sinastria_ai(payload_ai)
+        if body.tier == "premium" and decision is not None:
+            apply_premium_consumption(
+                state,
+                decision,
+                feature_cost=SINASTRIA_PREMIUM_COST,
+            )
+            save_user_credits_state(state)
 
+            paid_credits_after = state.paid_credits
+            free_credits_used_after = state.free_tries_used
         # ====================================================
         # 3b) Estrazione usage (usage_logs) – SOLO SUCCESSO
         # ====================================================

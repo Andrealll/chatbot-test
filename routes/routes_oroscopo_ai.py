@@ -1118,17 +1118,6 @@ async def oroscopo_ai_endpoint(
 
             decision = decide_premium_mode(state)
 
-            apply_premium_consumption(
-                state,
-                decision,
-                feature_cost=feature_cost,
-            )
-
-            save_user_credits_state(state)
-
-            paid_credits_after = state.paid_credits
-            free_credits_used_after = state.free_tries_used
-
             if decision.mode == "paid":
                 billing_mode = "paid"
             elif decision.mode == "free_credit":
@@ -1139,8 +1128,6 @@ async def oroscopo_ai_endpoint(
                 billing_mode = "error"
 
         else:
-            # tier free: nessun consumo, ma salviamo comunque lo stato
-            save_user_credits_state(state)
             billing_mode = "free"
 
         # ==============================
@@ -1166,7 +1153,17 @@ async def oroscopo_ai_endpoint(
         # 3) Chiamata Claude (oroscopo)
         # ==============================
         oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
+        if tier == "premium" and decision is not None:
+            apply_premium_consumption(
+                state,
+                decision,
+                feature_cost=feature_cost,
+            )
 
+            save_user_credits_state(state)
+
+            paid_credits_after = state.paid_credits
+            free_credits_used_after = state.free_tries_used
         # ==============================
         # 3b) COSTRUZIONE grafico + tabella_aspetti per HTTP
         # ==============================
