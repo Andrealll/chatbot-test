@@ -21,6 +21,8 @@ AUDIENCE = os.getenv("AUTH_AUDIENCE", "chatbot-test")
 def _load_public_key() -> bytes:
     pem = os.getenv("AUTH_PUBLIC_KEY_PEM")
     if pem:
+        logger.info("[AUTH] PEM WRAP PATCH ACTIVE")
+
         normalized = pem.replace("\\n", "\n").strip()
 
         if "BEGIN PUBLIC KEY" not in normalized:
