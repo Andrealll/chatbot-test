@@ -22,8 +22,15 @@ def _load_public_key() -> bytes:
     pem = os.getenv("AUTH_PUBLIC_KEY_PEM")
     if pem:
         normalized = pem.replace("\\n", "\n").strip()
-        lines = normalized.splitlines()
 
+        if "BEGIN PUBLIC KEY" not in normalized:
+            normalized = (
+                "-----BEGIN PUBLIC KEY-----\n"
+                + normalized
+                + "\n-----END PUBLIC KEY-----"
+            )
+
+        lines = normalized.splitlines()
         logger.info("[AUTH] using AUTH_PUBLIC_KEY_PEM")
         logger.info("[AUTH] literal_backslash_n=%s", "\\n" in pem)
         logger.info("[AUTH] first_line=%r", lines[0] if lines else None)
