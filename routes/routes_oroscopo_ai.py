@@ -63,8 +63,10 @@ class OroscopoAIRequest(BaseModel):
     email: Optional[str] = None
     domanda: Optional[str] = None
     tier: Optional[str] = "free"
+    lang: Optional[str] = "it"   # 👈 QUI
     ora_ignota: Optional[bool] = False  # 👈 NUOVO
-
+    country_code: Optional[str] = None
+    
     @validator("data")
     def _validate_data(cls, v: str) -> str:
         if len(v) != 10 or v[4] != "-" or v[7] != "-":
@@ -143,7 +145,8 @@ def _normalize_tier(raw: Optional[str]) -> Tier:
     if s in {"premium", "pro", "paid"}:
         return "premium"
     return "free"
-
+def _normalize_lang(raw: Optional[str]) -> str:
+    return "en" if str(raw).lower().strip() == "en" else "it"
 @dataclass
 class Persona:
     nome: str
@@ -153,7 +156,7 @@ class Persona:
     periodo: str
     tier: str
     ora_ignota: bool = False  # 👈 NUOVO
-
+    country_code: Optional[str] = None
 
 
 def _safe_iso_to_dt(s: Optional[str], today: Optional[date] = None) -> datetime:
@@ -218,7 +221,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
             out = [
                 {
                     "id": "inizio_settimana",
-                    "label": "Inizio settimana",
+                    "label": "Prossimi 2 giorni",
                     "range": {
                         "start": start_dt.isoformat(),
                         "end": (start_dt + timedelta(days=2)).isoformat(),
@@ -226,7 +229,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
                 },
                 {
                     "id": "meta_settimana",
-                    "label": "Metà settimana",
+                    "label": "2 giorni successivi",
                     "range": {
                         "start": (start_dt + timedelta(days=3)).isoformat(),
                         "end": (start_dt + timedelta(days=4)).isoformat(),
@@ -234,7 +237,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
                 },
                 {
                     "id": "weekend",
-                    "label": "Weekend",
+                    "label": "2 Giorni dopo",
                     "range": {
                         "start": weekend_start.isoformat(),
                         "end": (weekend_start + timedelta(days=1)).isoformat(),
@@ -268,7 +271,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
             out = [
                 {
                     "id": "prima_decade",
-                    "label": "1–10 del mese",
+                    "label": "Prima dieci giorni",
                     "range": {
                         "start": start_dt.isoformat(),
                         "end": (start_dt + timedelta(days=9)).isoformat(),
@@ -276,7 +279,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
                 },
                 {
                     "id": "seconda_decade",
-                    "label": "11–20 del mese",
+                    "label": "10-20 giorni da oggi",
                     "range": {
                         "start": (start_dt + timedelta(days=10)).isoformat(),
                         "end": (start_dt + timedelta(days=19)).isoformat(),
@@ -284,7 +287,7 @@ def generate_subperiods(periodo: str, tier: str, date_range: Dict[str, Any]) -> 
                 },
                 {
                     "id": "terza_decade",
-                    "label": "21–fine mese",
+                    "label": "20-30 giorni da oggi",
                     "range": {
                         "start": (start_dt + timedelta(days=20)).isoformat(),
                         "end": end_dt.isoformat(),
@@ -896,6 +899,7 @@ def _build_payload_ai(
     tier: Tier,
     engine_result: Dict[str, Any],
     data_input: OroscopoBaseInput,
+    lang: str,   # 👈 AGGIUNTO
 ) -> Dict[str, Any]:
     """
     Costruisce il payload_ai da passare a Claude usando:
@@ -932,6 +936,7 @@ def _build_payload_ai(
         periodo=periodo_ita,
         tier=tier,
         ora_ignota=ora_ignota_flag,  # 👈 NUOVO
+        country_code=data_input.country_code,
     )
 
 
@@ -947,7 +952,7 @@ def _build_payload_ai(
     # 3) payload AI usando il modulo ufficiale
     payload_ai = build_oroscopo_payload_ai(
         oroscopo_struct=oroscopo_struct,
-        lang="it",
+        lang=lang,   # 👈 QUI
         period_code=period_code,
     )
     
@@ -1001,6 +1006,7 @@ def _run_oroscopo_engine_new(
         citta=data_input.citta,
         data_nascita=data_input.data,
         ora_nascita=ora_effettiva,  # 👈 usa l'ora normalizzata
+        country_code=data_input.country_code,
         raw_date=date.today(),
     )
 
@@ -1058,7 +1064,7 @@ async def oroscopo_ai_endpoint(
     # ==============================
     scope: Periodo = _normalize_period(periodo)
     tier: Tier = _normalize_tier(payload.tier)
-
+    lang = _normalize_lang(payload.lang)   # 👈 QUI
     logger.info(
         "[OROSCOPO_AI] scope=%s tier=%s citta=%s data=%s nome=%s",
         scope,
@@ -1139,6 +1145,7 @@ async def oroscopo_ai_endpoint(
             data_input=payload,
         )
 
+
         # ==============================
         # 2) Build payload AI
         # ==============================
@@ -1147,6 +1154,7 @@ async def oroscopo_ai_endpoint(
             tier=tier,
             engine_result=engine_result,
             data_input=payload,
+            lang=lang,   # 👈 AGGIUNTO
         )
 
         # ==============================

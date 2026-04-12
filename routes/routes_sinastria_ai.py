@@ -45,6 +45,7 @@ class Persona(BaseModel):
     citta: str
     data: str        # YYYY-MM-DD
     ora: str         # "HH:MM" oppure "" se ora ignota
+    country_code: Optional[str] = None
     nome: Optional[str] = None
     ora_ignota: bool = False   # 👈 nuovo campo
 
@@ -53,6 +54,7 @@ class SinastriaAIRequest(BaseModel):
     A: Persona
     B: Persona
     tier: str = "free"   # "free" | "premium"
+    lang: str = "it"     # "it" | "en"
 
 
 # ==========================
@@ -87,6 +89,13 @@ async def sinastria_ai_endpoint(
         "client_source": client_source,
         "client_session": client_session,
     }
+    
+    # ==============================
+    # Lingua richiesta (IT/EN)
+    # ==============================
+    lang = (body.lang or "it").strip().lower()
+    if lang not in ("it", "en"):
+        lang = "it"    
 
     # Variabili di stato usate sia in success path che in error path
     state = None
@@ -150,10 +159,12 @@ async def sinastria_ai_endpoint(
         try:
             # firma reale del core: sinastria(dt_A, citta_A, dt_B, citta_B)
             sinastria_data = calcola_sinastria(
-                dt_A,          # 👈 datetime A
-                body.A.citta,  # 👈 città A
-                dt_B,          # 👈 datetime B
-                body.B.citta,  # 👈 città B
+                dt_A,                 # datetime A
+                body.A.citta,         # città A
+                dt_B,                 # datetime B
+                body.B.citta,         # città B
+                country_code_A=body.A.country_code,
+                country_code_B=body.B.country_code,
             )
         except Exception as e:
             logger.exception("[SINASTRIA_AI] Errore nel calcolo della sinastria")
@@ -415,7 +426,7 @@ async def sinastria_ai_endpoint(
                 "meta": {
                     "scope": "sinastria_ai",
                     "tier": body.tier,
-                    "lingua": "it",
+                    "lingua": lang,
                     "nome_A": body.A.nome,
                     "nome_B": body.B.nome,
                     "ora_ignota_A": body.A.ora_ignota,

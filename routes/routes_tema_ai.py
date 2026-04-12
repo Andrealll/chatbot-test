@@ -38,11 +38,13 @@ TEMA_AI_PREMIUM_COST = 2
 # ==========================
 class TemaAIRequest(BaseModel):
     citta: str
-    data: str = Field(..., alias="data_nascita")          # "YYYY-MM-DD"
-    ora: Optional[str] = Field(None, alias="ora_nascita") # "HH:MM" o vuota
+    data: str
+    ora: Optional[str] = None
+    country_code: Optional[str] = None
     nome: Optional[str] = None
     email: Optional[str] = None
     domanda: Optional[str] = None
+    lang: Literal["it", "en"] = "it"
     tier: Literal["free", "premium"] = "free"
     ora_ignota: bool = False
 
@@ -113,6 +115,7 @@ def tema_ai_endpoint(
                 citta=body.citta,
                 data_nascita=body.data,
                 ora_nascita=ora_for_tema,
+                country_code=body.country_code,
                 sistema_case="equal",
             )
             tema_input = tema.get("input") or {}
@@ -166,6 +169,7 @@ def tema_ai_endpoint(
                 nome=body.nome,
                 email=body.email,
                 domanda=body.domanda,
+                lang=body.lang,
                 tier=body.tier,
             )
         except Exception as e:
@@ -175,8 +179,7 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        out = call_claude_tema_ai(payload_ai, tier=body.tier)
-
+        out = call_claude_tema_ai(payload_ai, tier=body.tier, lang=body.lang)       
         # ====================================================
         # 3a) Parse/shape robusto
         # ====================================================
