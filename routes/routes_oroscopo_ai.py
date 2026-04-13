@@ -1122,23 +1122,25 @@ async def oroscopo_ai_endpoint(
                     ),
                 )
 
-        decision = decide_premium_mode(
-            state,
-            feature_cost=feature_cost,
-        )
-
-        if decision.mode == "premium_plan":
-            billing_mode = "premium_plan"
-        elif decision.mode == "combined_wallet":
-            billing_mode = "combined_wallet"
-        elif decision.mode == "free_trial":
-            billing_mode = "free_trial"
-        else:
-            raise HTTPException(
-                status_code=402,
-                detail="INSUFFICIENT_CREDITS",
+            decision = decide_premium_mode(
+                state,
+                feature_cost=feature_cost,
             )
 
+            if decision.mode == "premium_plan":
+                billing_mode = "premium_plan"
+            elif decision.mode == "combined_wallet":
+                billing_mode = "combined_wallet"
+            elif decision.mode == "free_trial":
+                billing_mode = "free_trial"
+            else:
+                raise HTTPException(
+                    status_code=402,
+                    detail="INSUFFICIENT_CREDITS",
+                )
+        else:
+            billing_mode = "free"
+            decision = None
         # ==============================
         # 1) ENGINE OROSCOPO (pipeline)
         # ==============================
