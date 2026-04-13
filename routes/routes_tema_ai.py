@@ -1,5 +1,3 @@
-# routes/routes_tema_ai.py
-
 import json
 import logging
 from typing import Dict, Any, Optional, Literal
@@ -109,6 +107,7 @@ def tema_ai_endpoint(
                 )
         else:
             billing_mode = "free"
+            decision = None
 
         # ====================================================
         # 1) Calcolo tema natale (ora ignota)
@@ -125,11 +124,16 @@ def tema_ai_endpoint(
                 sistema_case="equal",
             )
             tema_input = tema.get("input") or {}
-            tema_input["ora_ignota"] = bool(body.ora_ignota or tema_input.get("ora_ignota", False))
+            tema_input["ora_ignota"] = bool(
+                body.ora_ignota or tema_input.get("ora_ignota", False)
+            )
             tema["input"] = tema_input
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nel calcolo del tema natale")
-            raise HTTPException(status_code=500, detail=f"Errore nel calcolo del tema natale: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Errore nel calcolo del tema natale: {e}",
+            )
 
         # ====================================================
         # 1b) Payload visivo (tema_vis)
@@ -164,7 +168,10 @@ def tema_ai_endpoint(
 
         except Exception as e:
             logger.exception("[TEMA_AI] Errore nella costruzione del tema_vis")
-            raise HTTPException(status_code=500, detail=f"Errore nella costruzione del tema_vis: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Errore nella costruzione del tema_vis: {e}",
+            )
 
         # ====================================================
         # 2) Payload AI
@@ -185,7 +192,8 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        out = call_claude_tema_ai(payload_ai, tier=body.tier, lang=body.lang)       
+        out = call_claude_tema_ai(payload_ai, tier=body.tier, lang=body.lang)
+
         # ====================================================
         # 3a) Parse/shape robusto
         # ====================================================
@@ -197,7 +205,9 @@ def tema_ai_endpoint(
         parsed: Optional[Dict[str, Any]] = None
         parse_error: Optional[str] = None
 
-        if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
+        if isinstance(r, dict) and "result" in r and (
+            "ai_debug" in r or "error" in r or "parse_error" in r
+        ):
             r = r.get("result")
 
         if isinstance(r, dict) and r.get("error"):
@@ -214,7 +224,12 @@ def tema_ai_endpoint(
                     else:
                         parsed = None
                         if isinstance(tmp, dict):
-                            parse_error = tmp.get("parse_error") or tmp.get("detail") or tmp.get("error") or "JSON non valido"
+                            parse_error = (
+                                tmp.get("parse_error")
+                                or tmp.get("detail")
+                                or tmp.get("error")
+                                or "JSON non valido"
+                            )
                         else:
                             parse_error = "Risposta non in formato JSON (dict)."
                 except Exception as e:
@@ -222,7 +237,9 @@ def tema_ai_endpoint(
                     parse_error = f"result string non parseabile: {e}"
             else:
                 parsed = None
-                parse_error = f"Risposta non in formato JSON (dict). type={type(r).__name__}"
+                parse_error = (
+                    f"Risposta non in formato JSON (dict). type={type(r).__name__}"
+                )
 
         ai_debug = {"result": parsed, "ai_debug": ai_dbg}
 
@@ -249,40 +266,6 @@ def tema_ai_endpoint(
             model = None
             latency_ms = None
 
-        cost_paid_credits = 0
-        cost_free_credits = 0
-        if body.tier == "premium" and decision is not None:
-            if decision.mode == "paid":
-                cost_paid_credits = TEMA_AI_PREMIUM_COST
-            elif decision.mode == "free_credit":
-                cost_free_credits = TEMA_AI_PREMIUM_COST
-
-        # ====================================================
-        # 3c) Log usage SUCCESS
-        # ====================================================
-        try:
-            log_usage_event(
-                user_id=user.sub,
-                feature=TEMA_AI_FEATURE_KEY,
-                tier=body.tier,
-                role=role,
-                is_guest=is_guest,
-                billing_mode=billing_mode,
-                cost_paid_credits=cost_paid_credits,
-                cost_free_credits=cost_free_credits,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                model=model,
-                latency_ms=latency_ms,
-                paid_credits_before=paid_credits_before,
-                paid_credits_after=(state.paid_credits if state is not None else None),
-                free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(state.free_tries_used if state is not None else None),
-                request_json={**request_log_base, "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out}},
-            )
-        except Exception as e:
-            logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
-
         # ====================================================
         # 4) JSON non valido / vuoto
         # ====================================================
@@ -303,16 +286,18 @@ def tema_ai_endpoint(
                 "ai_debug": ai_debug,
                 "billing": {
                     "mode": billing_mode,
-                    "remaining_credits": (state.paid_credits if state is not None else None),
-                    "cost_credits": (
-                        TEMA_AI_PREMIUM_COST
-                        if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
-                        else 0
+                    "remaining_credits": (
+                        state.paid_credits if state is not None else None
                     ),
-                    "cost_paid_credits": cost_paid_credits,
-                    "cost_free_credits": cost_free_credits,
+                    "cost_credits": 0,
+                    "cost_paid_credits": 0,
+                    "cost_free_credits": 0,
                 },
             }
+
+        # ====================================================
+        # 4b) Consumo premium
+        # ====================================================
         if body.tier == "premium" and decision is not None:
             apply_premium_consumption(
                 state,
@@ -323,6 +308,63 @@ def tema_ai_endpoint(
 
             paid_credits_after = state.paid_credits
             free_credits_used_after = state.free_tries_used
+
+        # ====================================================
+        # 4c) Billing calcolato
+        # ====================================================
+        cost_paid_credits = 0
+        cost_free_credits = 0
+        cost_credits = 0
+
+        if body.tier == "premium" and decision is not None:
+            if decision.mode == "combined_wallet":
+                cost_paid_credits = TEMA_AI_PREMIUM_COST
+                cost_credits = TEMA_AI_PREMIUM_COST
+            elif decision.mode == "free_trial":
+                cost_paid_credits = 0
+                cost_free_credits = 0
+                cost_credits = 0
+            elif decision.mode == "premium_plan":
+                cost_paid_credits = 0
+                cost_free_credits = 0
+                cost_credits = 0
+
+        # ====================================================
+        # 4d) Log usage SUCCESS
+        # ====================================================
+        try:
+            log_usage_event(
+                user_id=user.sub,
+                feature=TEMA_AI_FEATURE_KEY,
+                tier=body.tier,
+                role=role,
+                is_guest=is_guest,
+                billing_mode=billing_mode,
+                cost_paid_credits=cost_paid_credits,
+                cost_free_credits=cost_free_credits,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                model=model,
+                latency_ms=latency_ms,
+                paid_credits_before=paid_credits_before,
+                paid_credits_after=(
+                    state.paid_credits if state is not None else None
+                ),
+                free_credits_used_before=free_credits_used_before,
+                free_credits_used_after=(
+                    state.free_tries_used if state is not None else None
+                ),
+                request_json={
+                    **request_log_base,
+                    "ai_call": {
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
+
         # ====================================================
         # 5) OK
         # ====================================================
@@ -341,19 +383,16 @@ def tema_ai_endpoint(
             "ai_debug": ai_debug,
             "billing": {
                 "mode": billing_mode,
-                "remaining_credits": (state.paid_credits if state is not None else None),
-                "cost_credits": (
-                    TEMA_AI_PREMIUM_COST
-                    if (body.tier == "premium" and billing_mode in ("paid", "free_credit"))
-                    else 0
+                "remaining_credits": (
+                    state.paid_credits if state is not None else None
                 ),
+                "cost_credits": cost_credits,
                 "cost_paid_credits": cost_paid_credits,
                 "cost_free_credits": cost_free_credits,
             },
         }
 
     except HTTPException as exc:
-        # log fallimento HTTPException
         try:
             log_usage_event(
                 user_id=user.sub,
@@ -369,12 +408,20 @@ def tema_ai_endpoint(
                 model=None,
                 latency_ms=None,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=(state.paid_credits if state is not None else None),
+                paid_credits_after=(
+                    state.paid_credits if state is not None else None
+                ),
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(state.free_tries_used if state is not None else None),
+                free_credits_used_after=(
+                    state.free_tries_used if state is not None else None
+                ),
                 request_json={
                     **request_log_base,
-                    "error": {"type": "http_exception", "status_code": exc.status_code, "detail": exc.detail},
+                    "error": {
+                        "type": "http_exception",
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    },
                 },
             )
         except Exception as log_err:
@@ -398,12 +445,19 @@ def tema_ai_endpoint(
                 model=None,
                 latency_ms=None,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=(state.paid_credits if state is not None else None),
+                paid_credits_after=(
+                    state.paid_credits if state is not None else None
+                ),
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(state.free_tries_used if state is not None else None),
+                free_credits_used_after=(
+                    state.free_tries_used if state is not None else None
+                ),
                 request_json={
                     **request_log_base,
-                    "error": {"type": "unexpected_exception", "detail": str(exc)},
+                    "error": {
+                        "type": "unexpected_exception",
+                        "detail": str(exc),
+                    },
                 },
             )
         except Exception as log_err:

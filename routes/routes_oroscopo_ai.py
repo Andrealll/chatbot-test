@@ -1039,7 +1039,6 @@ def _run_oroscopo_engine(
 # =============================
 # ROUTE PRINCIPALE
 # =============================
-
 @router.post(
     "/{periodo}",
     response_model=OroscopoResponse,
@@ -1051,20 +1050,10 @@ async def oroscopo_ai_endpoint(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ) -> OroscopoResponse:
-    """
-    Oroscopo AI con:
-    - normalizzazione periodo (daily/weekly/monthly/yearly)
-    - gating crediti stile tema_ai
-    - logging in usage_logs (tokens, billing, request_json)
-    - billing per periodo con costi diversi (OROSCOPO_FEATURE_COSTS)
-    """
-
-    # ==============================
-    # Metadati utente + request
-    # ==============================
     scope: Periodo = _normalize_period(periodo)
     tier: Tier = _normalize_tier(payload.tier)
-    lang = _normalize_lang(payload.lang)   # 👈 QUI
+    lang = _normalize_lang(payload.lang)
+
     logger.info(
         "[OROSCOPO_AI] scope=%s tier=%s citta=%s data=%s nome=%s",
         scope,
@@ -1089,7 +1078,6 @@ async def oroscopo_ai_endpoint(
         "tier": tier,
     }
 
-    # Variabili di stato per logging
     state = None
     decision: Optional[PremiumDecision] = None
     billing_mode = "free"
@@ -1141,15 +1129,15 @@ async def oroscopo_ai_endpoint(
         else:
             billing_mode = "free"
             decision = None
+
         # ==============================
-        # 1) ENGINE OROSCOPO (pipeline)
+        # 1) ENGINE OROSCOPO
         # ==============================
         engine_result = _run_oroscopo_engine(
             scope=scope,
             tier=tier,
             data_input=payload,
         )
-
 
         # ==============================
         # 2) Build payload AI
@@ -1159,13 +1147,14 @@ async def oroscopo_ai_endpoint(
             tier=tier,
             engine_result=engine_result,
             data_input=payload,
-            lang=lang,   # 👈 AGGIUNTO
+            lang=lang,
         )
 
         # ==============================
-        # 3) Chiamata Claude (oroscopo)
+        # 3) Chiamata Claude
         # ==============================
         oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
+
         if tier == "premium" and decision is not None:
             apply_premium_consumption(
                 state,
@@ -1177,8 +1166,9 @@ async def oroscopo_ai_endpoint(
 
             paid_credits_after = state.paid_credits
             free_credits_used_after = state.free_tries_used
+
         # ==============================
-        # 3b) COSTRUZIONE grafico + tabella_aspetti per HTTP
+        # 3b) Grafico + tabella aspetti
         # ==============================
         grafico_http: Optional[Dict[str, Any]] = None
         tabella_aspetti_http: Optional[List[Dict[str, Any]]] = None
@@ -1189,11 +1179,9 @@ async def oroscopo_ai_endpoint(
             period_block_http: Optional[Dict[str, Any]] = None
 
             if isinstance(periodi_struct, dict) and periodi_struct:
-                # single-period: ci aspettiamo UNA sola chiave (giornaliero/settimana/mensile/annuale in IT)
                 if len(periodi_struct) == 1:
                     period_block_http = list(periodi_struct.values())[0]
                 else:
-                    # fallback difensivo: prendiamo il primo valore
                     period_block_http = list(periodi_struct.values())[0]
 
             if isinstance(period_block_http, dict):
@@ -1210,7 +1198,7 @@ async def oroscopo_ai_endpoint(
             )
 
         # ==============================
-        # USAGE TOKENS / LATENCY da _ai_usage
+        # 3c) USAGE TOKENS / LATENCY
         # ==============================
         tokens_in = 0
         tokens_out = 0
@@ -1241,14 +1229,20 @@ async def oroscopo_ai_endpoint(
         # ==============================
         cost_paid_credits = 0
         cost_free_credits = 0
+        cost_credits = 0
 
         if tier == "premium" and decision is not None:
-            if decision.mode == "paid":
+            if decision.mode == "combined_wallet":
                 cost_paid_credits = feature_cost
-            elif decision.mode == "free_credit":
-                cost_free_credits = feature_cost
+                cost_credits = feature_cost
             elif decision.mode == "free_trial":
-                cost_free_credits = 0  # oppure feature_cost se vuoi contarlo come "valore" trial
+                cost_paid_credits = 0
+                cost_free_credits = 0
+                cost_credits = 0
+            elif decision.mode == "premium_plan":
+                cost_paid_credits = 0
+                cost_free_credits = 0
+                cost_credits = 0
 
         billing = {
             "tier": tier,
@@ -1258,6 +1252,7 @@ async def oroscopo_ai_endpoint(
             "remaining_credits": (
                 state.paid_credits if state is not None else None
             ),
+            "cost_credits": cost_credits,
             "cost_paid_credits": cost_paid_credits,
             "cost_free_credits": cost_free_credits,
         }
@@ -1316,9 +1311,6 @@ async def oroscopo_ai_endpoint(
             tabella_aspetti=tabella_aspetti_http,
         )
 
-    # ==============================
-    # 7) LOG ERRORI HTTP (gating, ecc.)
-    # ==============================
     except HTTPException as exc:
         feature_name = f"{OROSCOPO_FEATURE_KEY_PREFIX}_{scope}"
 
@@ -1361,9 +1353,6 @@ async def oroscopo_ai_endpoint(
 
         raise
 
-    # ==============================
-    # 8) LOG ERRORI INATTESI
-    # ==============================
     except Exception as exc:
         logger.exception("[OROSCOPO_AI] Errore non gestito")
         feature_name = f"{OROSCOPO_FEATURE_KEY_PREFIX}_{scope}"
