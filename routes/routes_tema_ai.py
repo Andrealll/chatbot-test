@@ -28,7 +28,7 @@ router = APIRouter()
 # Costi
 # ==========================
 TEMA_AI_FEATURE_KEY = "tema_ai"
-TEMA_AI_PREMIUM_COST = 2
+TEMA_AI_PREMIUM_COST = 4
 
 
 # ==========================
@@ -45,9 +45,31 @@ class TemaAIRequest(BaseModel):
     lang: Literal["it", "en"] = "it"
     tier: Literal["free", "premium"] = "free"
     ora_ignota: bool = False
+    report_type: Optional[str] = Field(
+        default="base",
+        description="base | amore | carriera | psicologia | karma",
+    )
 
     class Config:
         allow_population_by_field_name = True
+
+ALLOWED_REPORT_TYPES = {"base", "amore", "carriera", "psicologia", "karma"}
+
+REPORT_TYPE_ALIASES = {
+    "default": "base",
+    "love": "amore",
+    "career": "carriera",
+    "psychology": "psicologia",
+    "psych": "psicologia",
+    "karmic": "karma",
+}
+
+def normalize_report_type(report_type: Optional[str]) -> str:
+    value = (report_type or "base").strip().lower()
+    value = REPORT_TYPE_ALIASES.get(value, value)
+    if value not in ALLOWED_REPORT_TYPES:
+        return "base"
+    return value
 
 
 @router.post("/tema_ai")
@@ -61,12 +83,16 @@ def tema_ai_endpoint(
     role = getattr(user, "role", None)
     client_source = request.headers.get("x-client-source") or "unknown"
     client_session = request.headers.get("x-client-session")
-
+    report_type_norm = normalize_report_type(body.report_type)
     request_log_base: Dict[str, Any] = {
-        "body": body.dict(by_alias=True),
+        "body": {
+            **body.dict(by_alias=True),
+            "report_type_normalized": report_type_norm,
+        },
         "client_source": client_source,
         "client_session": client_session,
     }
+    
 
     state = None
     decision: Optional[PremiumDecision] = None
@@ -184,6 +210,7 @@ def tema_ai_endpoint(
                 domanda=body.domanda,
                 lang=body.lang,
                 tier=body.tier,
+                report_type=report_type_norm,
             )
         except Exception as e:
             logger.exception("[TEMA_AI] Errore build payload AI")
@@ -192,8 +219,12 @@ def tema_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        out = call_claude_tema_ai(payload_ai, tier=body.tier, lang=body.lang)
-
+        out = call_claude_tema_ai(
+            payload_ai,
+            tier=body.tier,
+            lang=body.lang,
+            report_type=report_type_norm,
+        )
         # ====================================================
         # 3a) Parse/shape robusto
         # ====================================================
@@ -371,7 +402,10 @@ def tema_ai_endpoint(
         return {
             "status": "ok",
             "scope": "tema_ai",
-            "input": body.dict(by_alias=True),
+            "input": {
+                **body.dict(by_alias=True),
+                "report_type_normalized": report_type_norm,
+            },
             "tema_vis": tema_vis,
             "payload_ai": payload_ai,
             "result": {
