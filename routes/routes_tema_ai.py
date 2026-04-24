@@ -225,6 +225,22 @@ def tema_ai_endpoint(
             lang=body.lang,
             report_type=report_type_norm,
         )
+        
+        logger.warning(
+            "[TEMA_AI DEBUG OUT] tier=%s report_type=%s out_type=%s out_keys=%s",
+            body.tier,
+            report_type_norm,
+            type(out).__name__,
+            list(out.keys()) if isinstance(out, dict) else None,
+        )
+        logger.warning(
+            "[TEMA_AI DEBUG OUT RESULT] %s",
+            repr(out.get("result"))[:2000] if isinstance(out, dict) else repr(out)[:2000],
+        )
+        logger.warning(
+            "[TEMA_AI DEBUG OUT AI_DEBUG] %s",
+            repr(out.get("ai_debug"))[:2000] if isinstance(out, dict) else None,
+)
         # ====================================================
         # 3a) Parse/shape robusto
         # ====================================================
@@ -300,6 +316,13 @@ def tema_ai_endpoint(
         # ====================================================
         # 4) JSON non valido / vuoto
         # ====================================================
+        logger.error(
+            "[TEMA_AI PARSE FAILED] tier=%s report_type=%s parse_error=%s raw_preview=%s",
+            body.tier,
+            report_type_norm,
+            parse_error,
+            raw_text[:1000] if raw_text else None,
+        )
         if parsed is None:
             return {
                 "status": "error",
@@ -363,6 +386,15 @@ def tema_ai_endpoint(
         # ====================================================
         # 4d) Log usage SUCCESS
         # ====================================================
+        logger.warning(
+            "[TEMA_AI BEFORE_USAGE_LOG] tier=%s report_type=%s billing_mode=%s tokens_in=%s tokens_out=%s",
+            body.tier,
+            report_type_norm,
+            billing_mode,
+            tokens_in,
+            tokens_out,
+        )
+        
         try:
             log_usage_event(
                 user_id=user.sub,

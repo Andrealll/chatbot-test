@@ -37,7 +37,7 @@ OROSCOPO_FEATURE_KEY_PREFIX = "oroscopo_ai"
 OROSCOPO_FEATURE_COSTS: Dict[Periodo, int] = {
     "daily": 1,
     "weekly": 2,
-    "monthly": 3,
+    "monthly": 4,
     "yearly": 5,
 }
 
@@ -1203,25 +1203,23 @@ async def oroscopo_ai_endpoint(
         tokens_in = 0
         tokens_out = 0
         model = None
-        latency_ms: Optional[float] = None
+        latency_ms: Optional[int] = None
 
         try:
             if isinstance(oroscopo_ai, dict):
-                ai_usage = oroscopo_ai.pop("_ai_usage", None)
-                if isinstance(ai_usage, dict):
-                    in_tok = ai_usage.get("input_tokens")
-                    out_tok = ai_usage.get("output_tokens")
-                    dur = ai_usage.get("duration_ms")
+                ai_debug = oroscopo_ai.get("_ai_debug") or oroscopo_ai.get("_ai_usage") or {}
 
-                    if isinstance(in_tok, (int, float)):
-                        tokens_in = int(in_tok)
-                    if isinstance(out_tok, (int, float)):
-                        tokens_out = int(out_tok)
-                    if isinstance(dur, (int, float)):
-                        latency_ms = float(dur)
+                if isinstance(ai_debug, dict):
+                    tokens_in = int(ai_debug.get("input_tokens") or 0)
+                    tokens_out = int(ai_debug.get("output_tokens") or 0)
+                    model = ai_debug.get("model")
+                    latency_ms = int((ai_debug.get("elapsed_sec") or 0) * 1000)
+
+                    if not latency_ms and ai_debug.get("duration_ms") is not None:
+                        latency_ms = int(ai_debug.get("duration_ms") or 0)
         except Exception:
             logger.exception(
-                "[OROSCOPO_AI] Errore lettura _ai_usage (input/output/duration_ms)"
+                "[OROSCOPO_AI] Errore lettura _ai_debug/_ai_usage"
             )
 
         # ==============================

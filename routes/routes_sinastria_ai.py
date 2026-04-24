@@ -33,7 +33,7 @@ router = APIRouter(prefix="/sinastria_ai", tags=["sinastria_ai"])
 #  Costi in crediti (parametrici)
 # ==========================
 SINASTRIA_FEATURE_KEY = "sinastria_ai"
-SINASTRIA_PREMIUM_COST = 3
+SINASTRIA_PREMIUM_COST = 5
 
 
 # ==========================
@@ -53,6 +53,7 @@ class SinastriaAIRequest(BaseModel):
     B: Persona
     tier: str = "free"
     lang: str = "it"
+    report_type: Optional[str] = None
 
 
 # ==========================
@@ -79,6 +80,12 @@ async def sinastria_ai_endpoint(
     lang = (body.lang or "it").strip().lower()
     if lang not in ("it", "en"):
         lang = "it"
+
+    report_type = (body.report_type or "").strip().lower()
+
+    if report_type not in {"amore", "amicizia", "famiglia", "lavoro"}:
+        report_type = "amore"
+
 
     state = None
     decision: Optional[PremiumDecision] = None
@@ -438,7 +445,7 @@ async def sinastria_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        sinastria_ai = call_claude_sinastria_ai(payload_ai)
+        sinastria_ai = call_claude_sinastria_ai(payload_ai, report_type=report_type)
 
         if body.tier == "premium" and decision is not None:
             apply_premium_consumption(
