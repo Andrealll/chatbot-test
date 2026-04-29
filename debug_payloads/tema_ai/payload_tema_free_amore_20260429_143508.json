@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "scope": "tema_ai",
+    "tier": "free",
+    "lang": "en",
+    "report_type": "amore",
+    "version": "1.0",
+    "nome": null,
+    "email": null,
+    "domanda": null,
+    "ora_ignota": false
+  },
+  "pianeti": {
+    "Sole": {
+      "segno": "Cancro",
+      "casa": 11,
+      "retrogrado": false
+    },
+    "Luna": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": false
+    },
+    "Mercurio": {
+      "segno": "Leone",
+      "casa": 12,
+      "retrogrado": true
+    },
+    "Venere": {
+      "segno": "Vergine",
+      "casa": 1,
+      "retrogrado": false
+    },
+    "Marte": {
+      "segno": "Capricorno",
+      "casa": 5,
+      "retrogrado": true
+    },
+    "Giove": {
+      "segno": "Pesci",
+      "casa": 7,
+      "retrogrado": true
+    },
+    "Saturno": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": true
+    },
+    "Urano": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": true
+    },
+    "Nettuno": {
+      "segno": "Capricorno",
+      "casa": 5,
+      "retrogrado": true
+    },
+    "Plutone": {
+      "segno": "Scorpione",
+      "casa": 3,
+      "retrogrado": false
+    },
+    "Nodo": {
+      "segno": "Ariete",
+      "casa": 8,
+      "retrogrado": true
+    },
+    "Lilith": {
+      "segno": "Cancro",
+      "casa": 11,
+      "retrogrado": true
+    },
+    "Ascendente": {
+      "segno": "Leone",
+      "casa": 1,
+      "retrogrado": false
+    }
+  },
+  "case": {}
+}

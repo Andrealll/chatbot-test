@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "scope": "tema_ai",
+    "tier": "premium",
+    "lang": "it",
+    "report_type": "base",
+    "version": "1.0",
+    "nome": null,
+    "email": null,
+    "domanda": null,
+    "ora_ignota": false
+  },
+  "pianeti": {
+    "Sole": {
+      "segno": "Cancro",
+      "casa": 11,
+      "retrogrado": false
+    },
+    "Luna": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": false
+    },
+    "Mercurio": {
+      "segno": "Leone",
+      "casa": 12,
+      "retrogrado": true
+    },
+    "Venere": {
+      "segno": "Vergine",
+      "casa": 1,
+      "retrogrado": false
+    },
+    "Marte": {
+      "segno": "Capricorno",
+      "casa": 5,
+      "retrogrado": true
+    },
+    "Giove": {
+      "segno": "Pesci",
+      "casa": 7,
+      "retrogrado": true
+    },
+    "Saturno": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": true
+    },
+    "Urano": {
+      "segno": "Sagittario",
+      "casa": 4,
+      "retrogrado": true
+    },
+    "Nettuno": {
+      "segno": "Capricorno",
+      "casa": 5,
+      "retrogrado": true
+    },
+    "Plutone": {
+      "segno": "Scorpione",
+      "casa": 3,
+      "retrogrado": false
+    },
+    "Nodo": {
+      "segno": "Ariete",
+      "casa": 8,
+      "retrogrado": true
+    },
+    "Lilith": {
+      "segno": "Cancro",
+      "casa": 11,
+      "retrogrado": true
+    },
+    "Ascendente": {
+      "segno": "Vergine",
+      "casa": 1,
+      "retrogrado": false
+    }
+  },
+  "case": {},
+  "kb_tema_glossario": {
+    "pianeti": {
+      "Sole": "Centro dell’identità conscia, volontà creativa, senso di missione e bisogno di esprimersi in modo autentico e visibile. Indica dove la persona vuole brillare e guidare.",
+      "Luna": "Mondo emotivo istintivo, bisogni di sicurezza, memoria affettiva e reazioni di pancia. Indica come la persona si protegge, nutre e cerca intimità.",
+      "Mercurio": "Stile mentale, logica, curiosità e modo di comunicare. Indica come la persona pensa, collega le informazioni e si relaziona verbalmente con il mondo.",
+      "Venere": "Gusto estetico, affettività e modo di cercare piacere e armonia. Parla di relazioni, valori personali e capacità di attrarre ciò che si desidera.",
+      "Marte": "Istinto d’azione, desiderio e affermazione diretta. Mostra come la persona combatte, difende i propri confini e incanala energia e rabbia.",
+      "Giove": "Espansione, fiducia e significato. Indica dove la persona cerca crescita, opportunità, conoscenza e senso etico o spirituale.",
+      "Saturno": "Limiti, responsabilità e struttura. Mostra prove, paure e dove serve disciplina per consolidare maturità, competenza e realismo.",
+      "Urano": "Bisogno di libertà, cambi improvvisi e pensiero anticonvenzionale. Indica dove la persona rompe schemi e introduce innovazione.",
+      "Nettuno": "Sensibilità sottile, immaginazione, sogno e fusione. Può indicare ispirazione spirituale oppure confusione, idealizzazione e fuga dalla realtà.",
+      "Plutone": "Processi profondi di crisi, potere e trasformazione. Evidenzia zone di controllo, ossessioni e potenziale di rigenerazione radicale.",
+      "Nodo": "Direzione evolutiva simbolica. Descrive qualità da sviluppare, esperienze di crescita e spostamento da vecchie abitudini a nuove competenze.",
+      "Lilith": "Parte istintiva non addomesticata, rifiuto di compromessi e tema di esclusione o rabbia profonda. Indica dove emergono desideri tabù."
+    },
+    "segni": {
+      "cancro": "Sensibilità, protezione e memoria emotiva. Forte bisogno di appartenenza, cure reciproche e radici affettive stabili.",
+      "sagittario": "Spinta a esplorare, capire il senso delle cose e superare limiti. Amore per libertà, viaggi, idee ampie e visione filosofica.",
+      "leone": "Orgoglio, creatività e bisogno di riconoscimento. Spinge a mostrarsi, guidare e lasciare un’impronta personale luminosa.",
+      "vergine": "Analisi, ordine e perfezionismo pratico. Orientamento al servizio, alla cura dei dettagli e al miglioramento continuo.",
+      "capricorno": "Realismo, ambizione e perseveranza. Focus su risultati concreti, responsabilità e costruzione di qualcosa che dura nel tempo.",
+      "pesci": "Empatia, immaginazione e tendenza alla fusione emotiva. Può oscillare tra compassione ispirata e fuga o confusione.",
+      "scorpione": "Intensità emotiva, controllo e bisogno di andare al nocciolo. Temi di potere, lealtà assoluta e trasformazioni profonde.",
+      "ariete": "Energia diretta, impulso e bisogno di iniziare. Stile spontaneo, competitivo, orientato all’azione rapida più che alla pianificazione."
+    },
+    "case": {
+      "casa_1": "Stile con cui ci si presenta al mondo, corpo e reazioni immediate. Mostra l’impatto iniziale sugli altri e il modo istintivo di iniziare ogni cosa.",
+      "casa_3": "Comunicazione quotidiana, pensiero concreto, fratelli e vicinato. Riguarda apprendimento di base, spostamenti brevi e reti locali.",
+      "casa_4": "Radici, famiglia d’origine e mondo interno più privato. Indica clima emotivo della casa e basi affettive su cui ci si appoggia.",
+      "casa_5": "Creatività personale, gioco, amore romantico e figli. Descrive come la persona si esprime in modo spontaneo e cerca piaceri creativi.",
+      "casa_7": "Relazioni di coppia, alleanze e contratti. Mostra il tipo di partner cercato e come si gestisce il confronto con l’altro alla pari.",
+      "casa_8": "Intimità profonda, risorse condivise, crisi e trasformazione. Collega sesso emotivo, tabù e processi di perdita e rinascita.",
+      "casa_11": "Amicizie, reti sociali e progetti condivisi. Riguarda ideali collettivi, appartenenza ai gruppi e speranze per il futuro.",
+      "casa_12": "Mondo inconscio, ritiro e temi irrisolti. Può indicare bisogno di solitudine, elaborazione interiore e tendenza a dinamiche nascoste."
+    },
+    "aspetti": {
+      "sestile": "Aperture e opportunità: facilita collaborazione e piccoli passi di crescita.",
+      "quadratura": "Tensione evolutiva: conflitti che spingono a cambiare abitudini e atteggiamenti.",
+      "trigono": "Flusso armonico naturale: talenti che scorrono con facilità, rischio di comfort zone.",
+      "quincunce": "Aggiustamento sottile: tensione ambigua che richiede adattamento e aggiustamenti continui.",
+      "opposizione": "Polarità: dinamica io-tu che chiede integrazione tra due poli opposti."
+    },
+    "coppie_rilevanti": [
+      {
+        "pianeta1": "Nettuno",
+        "pianeta2": "Plutone",
+        "tipo": "sestile",
+        "orb": 0.71
+      },
+      {
+        "pianeta1": "Sole",
+        "pianeta2": "Nodo",
+        "tipo": "quadratura",
+        "orb": 0.97
+      },
+      {
+        "pianeta1": "Mercurio",
+        "pianeta2": "Plutone",
+        "tipo": "quadratura",
+        "orb": 1.45
+      },
+      {
+        "pianeta1": "Plutone",
+        "pianeta2": "Lilith",
+        "tipo": "trigono",
+        "orb": 0.17
+      },
+      {
+        "pianeta1": "Mercurio",
+        "pianeta2": "Saturno",
+        "tipo": "trigono",
+        "orb": 0.25
+      },
+      {
+        "pianeta1": "Luna",
+        "pianeta2": "Nodo",
+        "tipo": "trigono",
+        "orb": 1.88
+      },
+      {
+        "pianeta1": "Mercurio",
+        "pianeta2": "Nettuno",
+        "tipo": "quincunce",
+        "orb": 0.73
+      },
+      {
+        "pianeta1": "Sole",
+        "pianeta2": "Luna",
+        "tipo": "quincunce",
+        "orb": 0.91
+      },
+      {
+        "pianeta1": "Saturno",
+        "pianeta2": "Lilith",
+        "tipo": "quincunce",
+        "orb": 1.37
+      },
+      {
+        "pianeta1": "Nettuno",
+        "pianeta2": "Lilith",
+        "tipo": "opposizione",
+        "orb": 0.88
+      }
+    ]
+  }
+}

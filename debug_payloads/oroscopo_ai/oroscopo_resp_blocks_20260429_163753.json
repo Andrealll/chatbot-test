@@ -1,0 +1,30 @@
+[
+  {
+    "type": "tool_use",
+    "name": "dyana_oroscopo_free",
+    "text": null,
+    "input": {
+      "schema_type": "daily",
+      "headline": "Emotions run deep today, but connection and charm work in your favor",
+      "mood": "Introspective yet magnetic",
+      "highlights": [
+        "Moon-Mars tension stirs restlessness and intensity",
+        "Sun-Venus harmony opens doors in relationships and self-expression",
+        "Mercury's influence sharpens your mind and communication"
+      ],
+      "focus": "Navigate emotional currents while leaning into your natural charisma",
+      "timing": {
+        "favorevole": "Afternoon and evening favor meaningful conversations and creative pursuits",
+        "delicato": "Morning may feel emotionally charged; give yourself space before engaging others"
+      },
+      "actions": {
+        "do": "Express yourself honestly, reach out to someone you care about, channel intensity into creative or physical outlets",
+        "avoid": "Reactive decisions, confrontation over small matters, isolating yourself"
+      },
+      "love": "Your warmth and authenticity shine today. If single, your presence draws attention. If partnered, vulnerability deepens connection.",
+      "work": "Mercury supports clear thinking and strategic communication. Use this to advance a project or clarify expectations with colleagues.",
+      "summary": "Today blends emotional depth with relational ease. A Moon-Mars square pushes you to feel intensely, while Sun-Venus harmony softens the edges and invites genuine connection. Mercury amplifies your mental clarity. This is a day to honor what you feel while staying open to others. Unlock the full daily phases, emotional timing, relationship guidance, and practical work strategies in premium.",
+      "cta_premium": "Go premium to see your hourly emotional rhythm, relationship windows, and work timing for maximum impact today."
+    }
+  }
+]

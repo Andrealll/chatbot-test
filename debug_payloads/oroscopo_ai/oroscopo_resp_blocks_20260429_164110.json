@@ -1,0 +1,30 @@
+[
+  {
+    "type": "tool_use",
+    "name": "dyana_oroscopo_premium",
+    "text": null,
+    "input": {
+      "schema_type": "daily",
+      "headline": "Charm and clarity guide your day—balance emotion with reason",
+      "mood": "Mixed: creative warmth tempered by inner restlessness",
+      "highlights": [
+        "Mercury trine Ascendant sharpens your communication and presence",
+        "Sun trine Venus opens doors to attraction and aesthetic pleasure",
+        "Mars square Mars tests your patience—channel energy wisely"
+      ],
+      "focus": "Harness mental clarity and social magnetism while managing underlying tension and emotional turbulence",
+      "timing": {
+        "favorevole": "Morning through afternoon: Mercury and Sun aspects peak, making this ideal for conversations, presentations, and decisions that require charm and logic combined",
+        "delicato": "Evening and into tomorrow: emotional undercurrents intensify; Mars friction may trigger impatience or defensive reactions if you push too hard"
+      },
+      "actions": {
+        "do": "Speak your mind clearly and authentically today—your words carry weight and appeal. Pursue collaborative work, creative projects, or social engagement. Use the morning energy for important talks or proposals.",
+        "avoid": "Don't force decisions under emotional pressure. Resist the urge to argue or assert dominance when challenged. Skip high-stakes confrontations; save them for when you're calmer."
+      },
+      "love": "Attraction is strong and mutual today. Your natural charm is amplified, and others respond to your warmth and presence. If you're single, this is a good day to connect or be noticed. If partnered, express affection through conversation and shared interests rather than intensity. Tomorrow brings even stronger relational energy, so pace yourself.",
+      "work": "Your mind is sharp and your communication lands well. This is an excellent day for meetings, negotiations, teaching, or any work that relies on clarity and persuasion. The Mars friction may create internal pressure or impatience with slow processes—stay organized and delegate if possible. Avoid micromanaging or rushing others.",
+      "summary": "Today blends intellectual brilliance with emotional sensitivity. Mercury and the Sun work in your favor, making you articulate and appealing; use this window for important conversations and creative work. The Mars square warns against forcing outcomes or letting frustration surface—your energy is high but needs direction. Tomorrow shifts toward deeper relational harmony, so today is about laying groundwork with clarity and grace. Stay grounded, listen as much as you speak, and trust your instincts without acting on every impulse.",
+      "cta_premium": "Your chart shows a rare blend of mental power and emotional depth. A full natal reading would reveal where these gifts are meant to shine most—and where your Mars friction points to real growth. Explore your complete birth chart to unlock lasting clarity."
+    }
+  }
+]

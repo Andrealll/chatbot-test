@@ -1,0 +1,196 @@
+{
+  "meta": {
+    "nome": "Anonimo",
+    "citta": "Napoli, United States",
+    "data_nascita": "1986-07-19",
+    "ora_nascita": "08:50",
+    "ora_ignota": false,
+    "tier": "premium",
+    "scope": "oroscopo_multi_snapshot",
+    "lang": "en"
+  },
+  "periodi": {
+    "giornaliero": {
+      "label": null,
+      "date_range": {},
+      "sottoperiodi": [
+        {
+          "id": "mattina",
+          "label": "Mattina",
+          "datetime": "2026-04-29T09:00:00"
+        },
+        {
+          "id": "pomeriggio",
+          "label": "Pomeriggio",
+          "datetime": "2026-04-29T15:00:00"
+        },
+        {
+          "id": "domani",
+          "label": "Domani",
+          "datetime": "2026-04-30T00:00:00"
+        }
+      ],
+      "aspetti_rilevanti": [
+        {
+          "chiave": "Sole_trigono_Venere",
+          "aspetto": "trigono",
+          "score_rilevanza": 0.7159470198675498,
+          "intensita_discreta": "debole",
+          "persistenza": {
+            "data_inizio": "2026-04-29",
+            "durata_giorni": 1
+          }
+        },
+        {
+          "chiave": "Mercurio_trigono_Ascendente",
+          "aspetto": "trigono",
+          "score_rilevanza": 0.700398947368421,
+          "intensita_discreta": "debole",
+          "persistenza": {
+            "data_inizio": "2026-04-29",
+            "durata_giorni": 1
+          }
+        },
+        {
+          "chiave": "Marte_quadratura_Marte",
+          "aspetto": "quadratura",
+          "score_rilevanza": 0.6038128249566724,
+          "intensita_discreta": "debole",
+          "persistenza": {
+            "data_inizio": "2026-04-29",
+            "durata_giorni": 1
+          }
+        },
+        {
+          "chiave": "Nettuno_trigono_Saturno",
+          "aspetto": "trigono",
+          "score_rilevanza": 0.5225058981233244,
+          "intensita_discreta": "debole",
+          "persistenza": {
+            "data_inizio": "2026-04-29",
+            "durata_giorni": 1
+          }
+        }
+      ],
+      "metriche_grafico": {
+        "samples": [
+          {
+            "label": "oggi",
+            "datetime": "2026-04-29T12:00",
+            "metrics": {
+              "raw_scores": {
+                "emozioni": -0.8416449999999994,
+                "relazioni": 0.4898250000000002,
+                "lavoro": 0.21297583333333336
+              },
+              "intensities": {
+                "emozioni": 0.33775473103459663,
+                "relazioni": 0.5967303761289278,
+                "lavoro": 0.5424924216341692
+              },
+              "n_aspetti": 49
+            }
+          },
+          {
+            "label": "stasera",
+            "datetime": "2026-04-29T19:00",
+            "metrics": {
+              "raw_scores": {
+                "emozioni": -0.5247291666666666,
+                "relazioni": 0.6918358333333332,
+                "lavoro": 0.1468175000000007
+              },
+              "intensities": {
+                "emozioni": 0.3965685977279144,
+                "relazioni": 0.634939973126564,
+                "lavoro": 0.5293297896321316
+              },
+              "n_aspetti": 51
+            }
+          },
+          {
+            "label": "domani",
+            "datetime": "2026-04-30T09:00",
+            "metrics": {
+              "raw_scores": {
+                "emozioni": -0.29922916666666727,
+                "relazioni": 0.8709795833333323,
+                "lavoro": 0.10756541666666608
+              },
+              "intensities": {
+                "emozioni": 0.44043832413022693,
+                "relazioni": 0.6674742843186573,
+                "lavoro": 0.5214998177839175
+              },
+              "n_aspetti": 51
+            }
+          }
+        ]
+      },
+      "pianeti_prevalenti": [
+        {
+          "pianeta": "Mercurio",
+          "score_periodo": 7.722,
+          "fattore_natale": 1.32,
+          "casa_natale_transito": 9,
+          "prima_occorrenza": "2026-04-29T12:00"
+        }
+      ]
+    }
+  },
+  "kb": {
+    "tema_glossario": {
+      "pianeti": {
+        "Mercurio": "Stile mentale, logica, curiosità e modo di comunicare. Indica come la persona pensa, collega le informazioni e si relaziona verbalmente con il mondo.",
+        "Venere": "Gusto estetico, affettività e modo di cercare piacere e armonia. Parla di relazioni, valori personali e capacità di attrarre ciò che si desidera.",
+        "Sole": "Centro dell’identità conscia, volontà creativa, senso di missione e bisogno di esprimersi in modo autentico e visibile. Indica dove la persona vuole brillare e guidare.",
+        "Marte": "Istinto d’azione, desiderio e affermazione diretta. Mostra come la persona combatte, difende i propri confini e incanala energia e rabbia.",
+        "Nettuno": "Sensibilità sottile, immaginazione, sogno e fusione. Può indicare ispirazione spirituale oppure confusione, idealizzazione e fuga dalla realtà.",
+        "Saturno": "Limiti, responsabilità e struttura. Mostra prove, paure e dove serve disciplina per consolidare maturità, competenza e realismo."
+      },
+      "segni": {},
+      "case": {
+        "casa_9": "Viaggi lontani, studi superiori e visioni del mondo. Riguarda fede, filosofia personale e ricerca di senso oltre il quotidiano.",
+        "casa_10": "Vocazione, immagine pubblica e obiettivi di lungo periodo. Indica come si cerca riconoscimento sociale e posizione nella società."
+      },
+      "aspetti": {
+        "trigono": "",
+        "quadratura": ""
+      },
+      "coppie_rilevanti": [
+        {
+          "pianeta1": "Sole",
+          "pianeta2": "Venere",
+          "tipo": "trigono",
+          "orb": null
+        },
+        {
+          "pianeta1": "Mercurio",
+          "pianeta2": "Ascendente",
+          "tipo": "trigono",
+          "orb": null
+        },
+        {
+          "pianeta1": "Marte",
+          "pianeta2": "Marte",
+          "tipo": "quadratura",
+          "orb": null
+        },
+        {
+          "pianeta1": "Nettuno",
+          "pianeta2": "Saturno",
+          "tipo": "trigono",
+          "orb": null
+        },
+        {
+          "pianeta1": "Nettuno",
+          "pianeta2": "Mercurio",
+          "tipo": "trigono",
+          "orb": null
+        }
+      ]
+    }
+  },
+  "engine": "astrobot-core",
+  "period_code": "daily"
+}
