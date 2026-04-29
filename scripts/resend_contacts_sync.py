@@ -258,7 +258,13 @@ async def main():
         profiles = await fetch_profiles(client)
 
         for row in profiles:
-            ok, lang, status = await upsert_contact(client, row)
+            try:
+                ok, lang, status = await upsert_contact(client, row)
+            except Exception as e:
+                print("UPSERT ERROR", row["email"], str(e))
+                await mark_welcome(client, row["user_id"], "error", str(e))
+                result["welcome_errors"] += 1
+                continue
             if ok:
                 result["synced"] += 1
                 if bool(row.get("marketing_consent", True)) and not bool(row.get("is_deleted")) and lang:
@@ -267,7 +273,7 @@ async def main():
             else:
                 result["sync_skipped"] += 1
 
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(2.0)
 
         candidates = await fetch_welcome_candidates(client)
         result["welcome_candidates"] = len(candidates)
@@ -291,7 +297,7 @@ async def main():
                 await mark_welcome(client, row["user_id"], "error", r.text)
                 result["welcome_errors"] += 1
 
-            await asyncio.sleep(0.30)
+            await asyncio.sleep(2.0)
 
     print(result)
 
