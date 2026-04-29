@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from astrobot_core.kb.tema_kb import build_aspetti_natali_con_kb
 from astrobot_core.sinastria import sinastria as calcola_sinastria
 from astrobot_core.ai_sinastria_claude import call_claude_sinastria_ai
+from astrobot_core.grafici import TEMA_VIS_I18N
 
 # --- IMPORT PER AUTH + CREDITI (come tema_ai) ---
 from auth import get_current_user, UserContext
@@ -167,6 +168,11 @@ async def sinastria_ai_endpoint(
         # ====================================================
         # 1c) Payload visivo per UI
         # ====================================================
+        lang = "en" if str(body.lang or "").strip().lower() == "en" else "it"
+        copy = TEMA_VIS_I18N[lang]
+        zodiac_it = TEMA_VIS_I18N["it"]["zodiac"]
+        zodiac_en = TEMA_VIS_I18N["en"]["zodiac"]
+        zodiac_map = dict(zip(zodiac_it, zodiac_en)) if lang == "en" else dict(zip(zodiac_it, zodiac_it))
         def _build_vis_tema(
             tema_dict: Dict[str, Any],
             nome_fallback: str,
@@ -187,6 +193,8 @@ async def sinastria_ai_endpoint(
                         continue
 
                     segno = info.get("segno") or info.get("segno_nome")
+                    nome_label = copy["planets"].get(nome, nome)
+                    segno_label = zodiac_map.get(segno, segno)
                     gradi_segno = (
                         info.get("gradi_segno")
                         or info.get("grado_segno")
@@ -195,7 +203,9 @@ async def sinastria_ai_endpoint(
 
                     item = {
                         "nome": nome,
+                        "nome_label": nome_label,
                         "segno": segno,
+                        "segno_label": segno_label,
                         "gradi_segno": gradi_segno,
                     }
 
@@ -239,13 +249,18 @@ async def sinastria_ai_endpoint(
                 orb_str = f"{float(orb):.1f}°" if isinstance(orb, (int, float)) else None
             except Exception:
                 orb_str = None
-
+                
+            p1_label = copy["planets"].get(p1, p1)
+            p2_label = copy["planets"].get(p2, p2)
+            tipo_key = str(tipo or "").lower()
+            tipo_label = copy["aspects"].get(tipo_key, tipo)
+            
             label = None
             if p1 and p2 and tipo:
                 if orb_str:
-                    label = f"{p1} {tipo} {p2} (orb {orb_str})"
+                    label = f"{p1_label} {tipo_label} {p2_label} (orb {orb_str})"
                 else:
-                    label = f"{p1} {tipo} {p2}"
+                    label = f"{p1_label} {tipo_label} {p2_label}"
 
             aspetti_vis.append(
                 {
@@ -254,6 +269,7 @@ async def sinastria_ai_endpoint(
                     "tipo": tipo,
                     "orb": orb,
                     "label": label,
+                    "tipo_label": tipo_label,
                 }
             )
 

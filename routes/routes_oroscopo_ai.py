@@ -795,38 +795,60 @@ def build_oroscopo_struct_from_pipe(
 def _build_grafico_http_from_period_block(
     period_block: Dict[str, Any],
     scope: Periodo,
+    payload: OroscopoAIRequest,
+    lang: str,
 ) -> Dict[str, Any]:
-    """
-    Converte metriche_grafico del period_block in un formato minimal per il front-end:
-
-    {
-      "scope": "daily",
-      "axes": ["emozioni", "relazioni", "lavoro"],
-      "samples": [
-        {
-          "label": "...",
-          "datetime": "...",
-          "emozioni": 0.73,
-          "relazioni": 0.40,
-          "lavoro": 0.85
-        },
-        ...
-      ]
-    }
-    """
     mg = period_block.get("metriche_grafico") or {}
     samples_in = mg.get("samples") or []
     if not isinstance(samples_in, list) or not samples_in:
         return {}
+
+    axis_labels = {
+        "it": {"emozioni": "Emozioni", "relazioni": "Relazioni", "lavoro": "Lavoro"},
+        "en": {"emozioni": "Emotions", "relazioni": "Relationships", "lavoro": "Work"},
+    }[lang]
+
+    sample_label_map = {
+        "it": {
+            "Settimana": "Settimana",
+            "Settimana intera": "Settimana",
+            "Weekend": "Weekend",
+            "Inizio settimana": "Inizio settimana",
+            "Metà settimana": "Metà settimana",
+            "1–10 del mese": "1–10 del mese",
+            "11–20 del mese": "11–20 del mese",
+            "21–fine mese": "21–fine mese",
+            "Inverno": "Inverno",
+            "Primavera": "Primavera",
+            "Estate": "Estate",
+            "Autunno": "Autunno",
+        },
+        "en": {
+            "Settimana": "Week",
+            "Settimana intera": "Week",
+            "Weekend": "Weekend",
+            "Inizio settimana": "Early week",
+            "Metà settimana": "Midweek",
+            "1–10 del mese": "Days 1–10",
+            "11–20 del mese": "Days 11–20",
+            "21–fine mese": "Days 21–end",
+            "Inverno": "Winter",
+            "Primavera": "Spring",
+            "Estate": "Summer",
+            "Autunno": "Autumn",
+        },
+    }[lang]
 
     out_samples: List[Dict[str, Any]] = []
 
     for s in samples_in:
         m = s.get("metrics") or {}
         intens = m.get("intensities") or {}
+        raw_label = s.get("label")
+
         out_samples.append(
             {
-                "label": s.get("label"),
+                "label": sample_label_map.get(raw_label, raw_label),
                 "datetime": s.get("datetime"),
                 "emozioni": intens.get("emozioni"),
                 "relazioni": intens.get("relazioni"),
@@ -836,39 +858,31 @@ def _build_grafico_http_from_period_block(
 
     return {
         "scope": scope,
+        "meta": {
+            "nome": payload.nome,
+            "data": payload.data,
+            "ora": None if payload.ora_ignota else payload.ora,
+            "ora_ignota": bool(payload.ora_ignota),
+            "citta": payload.citta,
+            "country_code": payload.country_code,
+        },
         "axes": ["emozioni", "relazioni", "lavoro"],
+        "axis_labels": axis_labels,
         "samples": out_samples,
     }
 
-
 def _build_tabella_aspetti_http_from_period_block(
     period_block: Dict[str, Any],
+    lang: str,
 ) -> List[Dict[str, Any]]:
-    """
-    Tabella aspetti light per il front-end, senza ripetizioni inutili:
+    planet_map = {"Sole":"Sun","Luna":"Moon","Mercurio":"Mercury","Venere":"Venus","Marte":"Mars","Giove":"Jupiter","Saturno":"Saturn","Urano":"Uranus","Nettuno":"Neptune","Plutone":"Pluto"} if lang == "en" else {}
+    aspect_map = {"congiunzione":"conjunction","trigono":"trine","sestile":"sextile","quadratura":"square","opposizione":"opposition"} if lang == "en" else {}
+    intensity_map = {"debole":"weak","media":"medium","forte":"strong"} if lang == "en" else {}
 
-    [
-      {
-        "pianeta_transito": "...",
-        "pianeta_natale": "...",
-        "aspetto": "congiunzione/quadratura/...",
-        "intensita_discreta": "forte/debole/...",
-        "persistenza": { "data_inizio": "...", "durata_giorni": N },
-        "score_rilevanza": ...
-      },
-      ...
-    ]
-    """
     aspetti = period_block.get("aspetti_rilevanti") or []
-    if not isinstance(aspetti, list):
-        return []
-
-    out: List[Dict[str, Any]] = []
-    seen = set()
+    out, seen = [], set()
 
     for a in aspetti:
-        if not isinstance(a, dict):
-            continue
         tp = a.get("pianeta_transito")
         np = a.get("pianeta_natale")
         asp = a.get("aspetto") or a.get("tipo")
@@ -880,19 +894,23 @@ def _build_tabella_aspetti_http_from_period_block(
             continue
         seen.add(key)
 
-        out.append(
-            {
-                "pianeta_transito": tp,
-                "pianeta_natale": np,
-                "aspetto": asp,
-                "intensita_discreta": a.get("intensita_discreta"),
-                "persistenza": a.get("persistenza"),
-                "score_rilevanza": a.get("score_rilevanza"),
-            }
-        )
+        tp_label = planet_map.get(str(tp), tp)
+        np_label = planet_map.get(str(np), np)
+        asp_label = aspect_map.get(str(asp).lower(), asp)
+        intensita = a.get("intensita_discreta")
+        intensita_label = intensity_map.get(str(intensita).lower(), intensita)
+
+        out.append({
+            "pianeta_transito": tp_label,
+            "pianeta_natale": np_label,
+            "aspetto": asp_label,
+            "intensita_discreta": intensita_label,
+            "persistenza": a.get("persistenza"),
+            "score_rilevanza": a.get("score_rilevanza"),
+            "label": f"{tp_label} {asp_label} {np_label}",
+        })
 
     return out
-
 
 def _build_payload_ai(
     scope: Periodo,
@@ -1188,9 +1206,12 @@ async def oroscopo_ai_endpoint(
                 grafico_http = _build_grafico_http_from_period_block(
                     period_block_http,
                     scope=scope,
+                    payload=payload,
+                    lang=lang,
                 )
                 tabella_aspetti_http = _build_tabella_aspetti_http_from_period_block(
-                    period_block_http
+                    period_block_http,
+                    lang=lang,
                 )
         except Exception as e:
             logger.exception(

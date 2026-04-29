@@ -170,7 +170,12 @@ def tema_ai_endpoint(
             aspetti = tema.get("natal_aspects") or []
 
             tema_vis: Dict[str, Any] = {}
-
+            tema_vis["meta"] = {
+                "data": body.data,
+                "ora": None if body.ora_ignota else body.ora,
+                "ora_ignota": bool(body.ora_ignota),
+                "citta": body.citta,
+            }
             try:
                 chart_png_base64 = grafico_tema_natal(
                     pianeti_decod=pianeti_decod,
@@ -186,9 +191,11 @@ def tema_ai_endpoint(
                     pianeti_decod=pianeti_decod,
                     asc_mc_case=asc_mc_case,
                     aspetti=aspetti,
+                    lang=body.lang,
                 )
                 tema_vis["pianeti"] = text_payload.get("pianeti", [])
                 tema_vis["aspetti"] = text_payload.get("aspetti", [])
+                logger.warning("[TEMA_VIS_DEBUG] lang=%r pianeti=%s aspetti=%s keys=%s", body.lang, len(tema_vis.get("pianeti", [])), len(tema_vis.get("aspetti", [])), list(tema_vis.keys()))
             except Exception as te:
                 logger.exception("[TEMA_AI] Errore payload testuale tema_vis: %r", te)
 
