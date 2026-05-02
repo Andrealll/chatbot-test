@@ -20,12 +20,17 @@ WELCOME_DRY_RUN = os.getenv("WELCOME_DRY_RUN", "1") == "1"
 
 
 def require_env():
-    missing = [k for k, v in {
-        "SUPABASE_URL": SUPABASE_URL,
-        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_KEY,
-        "RESEND_API_KEY": RESEND_KEY,
-        "RESEND_FROM_EMAIL": FROM_EMAIL,
-    }.items() if not v]
+    missing = [
+        k for k, v in {
+            "SUPABASE_URL": SUPABASE_URL,
+            "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_KEY,
+            "RESEND_API_KEY": RESEND_KEY,
+            "RESEND_FROM_EMAIL": FROM_EMAIL,
+            "RESEND_SEGMENT_OPTIN_IT": SEG_OPTIN_IT,
+            "RESEND_SEGMENT_OPTIN_EN": SEG_OPTIN_EN,
+        }.items()
+        if not v
+    ]
     if missing:
         raise RuntimeError(f"Missing env: {', '.join(missing)}")
 
@@ -53,11 +58,11 @@ def norm_lang(value):
 
 
 async def resend_request(client, method, url, **kwargs):
-    for attempt in range(5):
+    for attempt in range(6):
         r = await client.request(method, url, headers=resend_headers(), **kwargs)
         if r.status_code != 429:
             return r
-        await asyncio.sleep(3 + attempt)
+        await asyncio.sleep(4 + attempt)
     return r
 
 
@@ -74,7 +79,7 @@ async def fetch_profiles(client):
         f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
         headers=sb_headers(),
         params={
-            "select": "user_id,email,lang,marketing_consent,marketing_consent_updated_at,is_deleted,welcome_email_status",
+            "select": "user_id,email,lang,marketing_consent,marketing_consent_updated_at,is_deleted,welcome_email_status,welcome_email_sent_at,updated_at",
             "email": "not.is.null",
             "limit": "1000",
         },
@@ -82,12 +87,13 @@ async def fetch_profiles(client):
     r.raise_for_status()
     return r.json()
 
+
 async def fetch_welcome_candidates(client):
     r = await client.get(
         f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
         headers=sb_headers(),
         params={
-            "select": "user_id,email,lang,marketing_consent,is_deleted,welcome_email_status,updated_at",
+            "select": "user_id,email,lang,marketing_consent,is_deleted,welcome_email_status,welcome_email_sent_at,updated_at",
             "email": "not.is.null",
             "limit": "1000",
         },
@@ -99,18 +105,30 @@ async def fetch_welcome_candidates(client):
     r.raise_for_status()
     rows = r.json()
 
-    candidates = [
-        x for x in rows
-        if x.get("is_deleted") is False
-        and x.get("marketing_consent") is True
-        and x.get("welcome_email_status") is None
-        and x.get("email")
-        and not str(x.get("email")).startswith("deleted_")
-        and x.get("lang") in ("it", "en")
-    ]
+    candidates = []
+    for x in rows:
+        email = str(x.get("email") or "")
+        status = x.get("welcome_email_status")
+
+        if x.get("is_deleted") is not False:
+            continue
+        if x.get("marketing_consent") is not True:
+            continue
+        if not email or email.startswith("deleted_"):
+            continue
+        if x.get("lang") not in ("it", "en"):
+            continue
+        if x.get("welcome_email_sent_at") is not None:
+            continue
+        if status == "sent":
+            continue
+
+        candidates.append(x)
+
+    candidates.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
 
     print("WELCOME_CANDIDATES", len(candidates))
-    print("WELCOME_EMAILS", [x["email"] for x in candidates[:50]])
+    print("WELCOME_EMAILS", [x["email"] for x in candidates[:100]])
 
     return candidates
 
@@ -122,7 +140,7 @@ def build_contact_payload(row, resend_contact=None):
     is_deleted = bool(row.get("is_deleted"))
     consent = bool(row.get("marketing_consent", True))
     lang = norm_lang(row.get("lang")) or norm_lang(old_props.get("lang"))
-    welcome_sent = 1 if row.get("welcome_email_status") == "sent" else 0
+    welcome_sent = 1 if row.get("welcome_email_status") == "sent" or row.get("welcome_email_sent_at") else 0
 
     props = {
         "marketing_consent": 0 if is_deleted else (1 if consent else 0),
@@ -306,7 +324,7 @@ async def main():
                     result["sync_skipped"] += 1
 
             except Exception as e:
-                print("SYNC ERROR", row.get("email"), str(e))
+                print("SYNC_ERROR", row.get("email"), str(e))
                 result["sync_errors"] += 1
 
             await asyncio.sleep(2.0)
@@ -319,12 +337,14 @@ async def main():
                 ok, lang, status = await upsert_contact(client, row)
 
                 if not ok:
-                    await mark_welcome(client, row["user_id"], "error", status)
+                    print("WELCOME_UPSERT_SKIP", row["email"], status)
+                    if not WELCOME_DRY_RUN:
+                        await mark_welcome(client, row["user_id"], "error", status)
                     result["welcome_errors"] += 1
                     continue
 
                 if WELCOME_DRY_RUN:
-                    print("DRY_RUN WELCOME", row["lang"], row["email"])
+                    print("DRY_RUN_WELCOME", row["lang"], row["email"])
                     continue
 
                 r = await send_welcome(client, row)
@@ -337,8 +357,9 @@ async def main():
                     result["welcome_errors"] += 1
 
             except Exception as e:
-                print("WELCOME ERROR", row.get("email"), str(e))
-                await mark_welcome(client, row["user_id"], "error", str(e))
+                print("WELCOME_ERROR", row.get("email"), str(e))
+                if not WELCOME_DRY_RUN:
+                    await mark_welcome(client, row["user_id"], "error", str(e))
                 result["welcome_errors"] += 1
 
             await asyncio.sleep(2.0)
