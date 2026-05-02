@@ -193,7 +193,15 @@ async def upsert_contact(client, row):
             return True, lang, "updated"
 
         if r.status_code == 404:
-            return False, lang, "skipped_missing_after_conflict"
+            r = await resend_request(
+                client,
+                "POST",
+                "https://api.resend.com/contacts",
+                json=payload,
+            )
+            if r.status_code in (200, 201, 409):
+                return True, lang, "created_after_missing_conflict"
+            return False, lang, f"skipped_missing_after_conflict:{r.status_code}:{r.text}"
 
     raise RuntimeError(f"upsert failed {email}: {r.status_code} {r.text}")
 
