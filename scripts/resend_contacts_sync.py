@@ -82,26 +82,37 @@ async def fetch_profiles(client):
     r.raise_for_status()
     return r.json()
 
-
 async def fetch_welcome_candidates(client):
     r = await client.get(
         f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
         headers=sb_headers(),
         params={
-            "select": "user_id,email,lang,marketing_consent,marketing_consent_updated_at,is_deleted,welcome_email_status,updated_at",
-            "is_deleted": "eq.false",
-            "marketing_consent": "eq.true",
-            "welcome_email_status": "is.null",
+            "select": "user_id,email,lang,marketing_consent,is_deleted,welcome_email_status,updated_at",
             "email": "not.is.null",
-            "lang": "in.(it,en)",
-            "order": "updated_at.desc",
-            "limit": "500",
+            "limit": "1000",
         },
     )
+
     print("WELCOME_URL", str(r.request.url))
-    print("WELCOME_BODY", r.text[:2000])
+    print("WELCOME_STATUS", r.status_code)
+
     r.raise_for_status()
-    return r.json()
+    rows = r.json()
+
+    candidates = [
+        x for x in rows
+        if x.get("is_deleted") is False
+        and x.get("marketing_consent") is True
+        and x.get("welcome_email_status") is None
+        and x.get("email")
+        and not str(x.get("email")).startswith("deleted_")
+        and x.get("lang") in ("it", "en")
+    ]
+
+    print("WELCOME_CANDIDATES", len(candidates))
+    print("WELCOME_EMAILS", [x["email"] for x in candidates[:50]])
+
+    return candidates
 
 
 def build_contact_payload(row, resend_contact=None):
