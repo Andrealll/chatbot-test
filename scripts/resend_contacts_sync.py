@@ -144,17 +144,19 @@ async def add_optin_segment(client, email, lang):
     if r.status_code not in (200, 201, 204, 409):
         raise RuntimeError(f"segment failed {email}: {r.status_code} {r.text}")
 
-
 async def fetch_welcome_candidates(client):
     params = {
-        "select": "user_id,email,lang,created_at",
+        "select": "user_id,email,lang,updated_at,welcome_email_status",
+        "is_deleted": "eq.false",
+        "marketing_consent": "eq.true",
+        "welcome_email_status": "is.null",
+        "email": "not.is.null",
+        "lang": "in.(it,en)",
         "limit": "500",
     }
-    if WELCOME_START_AT:
-        params["created_at"] = f"gte.{WELCOME_START_AT}"
 
     r = await client.get(
-        f"{SUPABASE_URL}/rest/v1/v_welcome_email_candidates",
+        f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
         headers=sb_headers(),
         params=params,
     )
