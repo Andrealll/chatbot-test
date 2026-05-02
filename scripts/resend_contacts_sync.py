@@ -11,26 +11,21 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 RESEND_KEY = os.getenv("RESEND_API_KEY")
+FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL")
 
 SEG_OPTIN_IT = os.getenv("RESEND_SEGMENT_OPTIN_IT")
 SEG_OPTIN_EN = os.getenv("RESEND_SEGMENT_OPTIN_EN")
 
-FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL")
 WELCOME_DRY_RUN = os.getenv("WELCOME_DRY_RUN", "1") == "1"
-WELCOME_START_AT = os.getenv("WELCOME_START_AT")
 
 
 def require_env():
-    missing = [
-        k for k, v in {
-            "SUPABASE_URL": SUPABASE_URL,
-            "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_KEY,
-            "RESEND_API_KEY": RESEND_KEY,
-            "RESEND_FROM_EMAIL": FROM_EMAIL,
-        }.items() if not v
-    ]
-    if not WELCOME_DRY_RUN and not WELCOME_START_AT:
-        missing.append("WELCOME_START_AT")
+    missing = [k for k, v in {
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_KEY,
+        "RESEND_API_KEY": RESEND_KEY,
+        "RESEND_FROM_EMAIL": FROM_EMAIL,
+    }.items() if not v]
     if missing:
         raise RuntimeError(f"Missing env: {', '.join(missing)}")
 
@@ -57,8 +52,17 @@ def norm_lang(value):
     return v if v in ("it", "en") else None
 
 
+async def resend_request(client, method, url, **kwargs):
+    for attempt in range(5):
+        r = await client.request(method, url, headers=resend_headers(), **kwargs)
+        if r.status_code != 429:
+            return r
+        await asyncio.sleep(3 + attempt)
+    return r
+
+
 async def get_resend_contact(client, email):
-    r = await client.get(f"https://api.resend.com/contacts/{email}", headers=resend_headers())
+    r = await resend_request(client, "GET", f"https://api.resend.com/contacts/{email}")
     if r.status_code == 404:
         return None
     r.raise_for_status()
@@ -79,13 +83,34 @@ async def fetch_profiles(client):
     return r.json()
 
 
+async def fetch_welcome_candidates(client):
+    r = await client.get(
+        f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
+        headers=sb_headers(),
+        params={
+            "select": "user_id,email,lang,marketing_consent,marketing_consent_updated_at,is_deleted,welcome_email_status,updated_at",
+            "is_deleted": "eq.false",
+            "marketing_consent": "eq.true",
+            "welcome_email_status": "is.null",
+            "email": "not.is.null",
+            "lang": "in.(it,en)",
+            "order": "updated_at.desc",
+            "limit": "500",
+        },
+    )
+    print("WELCOME_URL", str(r.request.url))
+    print("WELCOME_BODY", r.text[:2000])
+    r.raise_for_status()
+    return r.json()
+
+
 def build_contact_payload(row, resend_contact=None):
     now = datetime.now(timezone.utc).isoformat()
-    props_old = (resend_contact or {}).get("properties") or {}
+    old_props = (resend_contact or {}).get("properties") or {}
 
     is_deleted = bool(row.get("is_deleted"))
     consent = bool(row.get("marketing_consent", True))
-    lang = norm_lang(row.get("lang")) or norm_lang(props_old.get("lang"))
+    lang = norm_lang(row.get("lang")) or norm_lang(old_props.get("lang"))
     welcome_sent = 1 if row.get("welcome_email_status") == "sent" else 0
 
     props = {
@@ -114,19 +139,30 @@ async def upsert_contact(client, row):
 
     payload, lang, is_deleted, consent = build_contact_payload(row, resend_contact)
 
-    r = await client.post("https://api.resend.com/contacts", headers=resend_headers(), json=payload)
+    r = await resend_request(
+        client,
+        "POST",
+        "https://api.resend.com/contacts",
+        json=payload,
+    )
 
     if r.status_code in (200, 201):
         return True, lang, "created"
 
     if r.status_code in (409, 422):
-        r = await client.patch(
+        r = await resend_request(
+            client,
+            "PATCH",
             f"https://api.resend.com/contacts/{email}",
-            headers=resend_headers(),
-            json={"unsubscribed": payload["unsubscribed"], "properties": payload["properties"]},
+            json={
+                "unsubscribed": payload["unsubscribed"],
+                "properties": payload["properties"],
+            },
         )
+
         if r.status_code in (200, 201):
             return True, lang, "updated"
+
         if r.status_code == 404:
             return False, lang, "skipped_missing_after_conflict"
 
@@ -136,32 +172,18 @@ async def upsert_contact(client, row):
 async def add_optin_segment(client, email, lang):
     seg = SEG_OPTIN_IT if lang == "it" else SEG_OPTIN_EN if lang == "en" else None
     if not seg:
-        return
-    r = await client.post(
+        return False
+
+    r = await resend_request(
+        client,
+        "POST",
         f"https://api.resend.com/contacts/{email}/segments/{seg}",
-        headers=resend_headers(),
     )
-    if r.status_code not in (200, 201, 204, 409):
-        raise RuntimeError(f"segment failed {email}: {r.status_code} {r.text}")
 
-async def fetch_welcome_candidates(client):
-    params = {
-        "select": "user_id,email,lang,updated_at,welcome_email_status",
-        "is_deleted": "eq.false",
-        "marketing_consent": "eq.true",
-        "welcome_email_status": "is.null",
-        "email": "not.is.null",
-        "lang": "in.(it,en)",
-        "limit": "500",
-    }
+    if r.status_code in (200, 201, 204, 409):
+        return True
 
-    r = await client.get(
-        f"{SUPABASE_URL}/rest/v1/user_marketing_profile",
-        headers=sb_headers(),
-        params=params,
-    )
-    r.raise_for_status()
-    return r.json()
+    raise RuntimeError(f"segment failed {email}: {r.status_code} {r.text}")
 
 
 def welcome_copy(lang):
@@ -170,20 +192,15 @@ def welcome_copy(lang):
             "subject": "Il tuo spazio DYANA è attivo",
             "html": """
 <p>Ciao,</p>
-
 <p>il tuo spazio su DYANA è attivo.</p>
-
 <p>Puoi:</p>
 <ul>
   <li>✨ esplorare il tuo <b>Tema Natale</b></li>
   <li>🔮 leggere il tuo <b>oroscopo aggiornato ogni giorno</b></li>
   <li>💞 scoprire la tua <b>compatibilità con un’altra persona</b></li>
 </ul>
-
 <p>👉 <a href="https://dyana.app/it/tema">Vai al tuo Tema</a></p>
-
 <p>Ogni giorno hai accesso a contenuti aggiornati e puoi consultare il tuo oroscopo completo.</p>
-
 <p>Sono disponibili crediti gratuiti per sbloccare le letture più approfondite.</p>
 """,
         }
@@ -192,31 +209,29 @@ def welcome_copy(lang):
         "subject": "Your DYANA space is active",
         "html": """
 <p>Hi,</p>
-
 <p>your DYANA space is now active.</p>
-
 <p>You can:</p>
 <ul>
   <li>✨ explore your <b>Birth Chart</b></li>
   <li>🔮 read your <b>updated daily horoscope</b></li>
   <li>💞 discover your <b>compatibility with someone</b></li>
 </ul>
-
 <p>👉 <a href="https://dyana.app/en/tema">Go to your chart</a></p>
-
 <p>You can come back every day to check your full horoscope.</p>
-
 <p>Free credits are available to unlock deeper readings.</p>
 """,
     }
 
+
 async def mark_welcome(client, user_id, status, error=None):
     now = datetime.now(timezone.utc).isoformat()
+
     payload = {
         "welcome_email_status": status,
         "welcome_email_error": error,
         "updated_at": now,
     }
+
     if status == "sent":
         payload["welcome_email_sent_at"] = now
 
@@ -230,9 +245,11 @@ async def mark_welcome(client, user_id, status, error=None):
 
 async def send_welcome(client, row):
     copy = welcome_copy(row["lang"])
-    r = await client.post(
+
+    return await resend_request(
+        client,
+        "POST",
         "https://api.resend.com/emails",
-        headers=resend_headers(),
         json={
             "from": FROM_EMAIL,
             "to": [row["email"]],
@@ -240,7 +257,6 @@ async def send_welcome(client, row):
             "html": copy["html"],
         },
     )
-    return r
 
 
 async def main():
@@ -250,30 +266,37 @@ async def main():
         "synced": 0,
         "segmented": 0,
         "sync_skipped": 0,
+        "sync_errors": 0,
         "welcome_candidates": 0,
         "welcome_sent": 0,
         "welcome_errors": 0,
         "dry_run": WELCOME_DRY_RUN,
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=45) as client:
         profiles = await fetch_profiles(client)
 
         for row in profiles:
             try:
                 ok, lang, status = await upsert_contact(client, row)
+
+                if ok:
+                    result["synced"] += 1
+
+                    if (
+                        bool(row.get("marketing_consent", True))
+                        and not bool(row.get("is_deleted"))
+                        and lang
+                    ):
+                        added = await add_optin_segment(client, row["email"], lang)
+                        if added:
+                            result["segmented"] += 1
+                else:
+                    result["sync_skipped"] += 1
+
             except Exception as e:
-                print("UPSERT ERROR", row["email"], str(e))
-                await mark_welcome(client, row["user_id"], "error", str(e))
-                result["welcome_errors"] += 1
-                continue
-            if ok:
-                result["synced"] += 1
-                if bool(row.get("marketing_consent", True)) and not bool(row.get("is_deleted")) and lang:
-                    await add_optin_segment(client, row["email"], lang)
-                    result["segmented"] += 1
-            else:
-                result["sync_skipped"] += 1
+                print("SYNC ERROR", row.get("email"), str(e))
+                result["sync_errors"] += 1
 
             await asyncio.sleep(2.0)
 
@@ -281,22 +304,30 @@ async def main():
         result["welcome_candidates"] = len(candidates)
 
         for row in candidates:
-            ok, lang, status = await upsert_contact(client, row)
-            if not ok:
-                await mark_welcome(client, row["user_id"], "error", status)
-                result["welcome_errors"] += 1
-                continue
+            try:
+                ok, lang, status = await upsert_contact(client, row)
 
-            if WELCOME_DRY_RUN:
-                print("DRY_RUN WELCOME", row["lang"], row["email"])
-                continue
+                if not ok:
+                    await mark_welcome(client, row["user_id"], "error", status)
+                    result["welcome_errors"] += 1
+                    continue
 
-            r = await send_welcome(client, row)
-            if r.status_code in (200, 201):
-                await mark_welcome(client, row["user_id"], "sent")
-                result["welcome_sent"] += 1
-            else:
-                await mark_welcome(client, row["user_id"], "error", r.text)
+                if WELCOME_DRY_RUN:
+                    print("DRY_RUN WELCOME", row["lang"], row["email"])
+                    continue
+
+                r = await send_welcome(client, row)
+
+                if r.status_code in (200, 201):
+                    await mark_welcome(client, row["user_id"], "sent")
+                    result["welcome_sent"] += 1
+                else:
+                    await mark_welcome(client, row["user_id"], "error", r.text)
+                    result["welcome_errors"] += 1
+
+            except Exception as e:
+                print("WELCOME ERROR", row.get("email"), str(e))
+                await mark_welcome(client, row["user_id"], "error", str(e))
                 result["welcome_errors"] += 1
 
             await asyncio.sleep(2.0)
