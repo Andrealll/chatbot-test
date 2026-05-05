@@ -110,7 +110,7 @@ async def fetch_welcome_candidates(client):
         email = str(x.get("email") or "")
         status = x.get("welcome_email_status")
 
-        if x.get("is_deleted") is not False:
+        if x.get("is_deleted") is True:
             continue
         if x.get("marketing_consent") is not True:
             continue
