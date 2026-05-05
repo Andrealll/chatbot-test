@@ -222,7 +222,6 @@ async def add_optin_segment(client, email, lang):
 
     raise RuntimeError(f"segment failed {email}: {r.status_code} {r.text}")
 
-
 def welcome_copy(lang):
     if lang == "it":
         return {
@@ -232,13 +231,13 @@ def welcome_copy(lang):
 <p>il tuo spazio su DYANA è attivo.</p>
 <p>Puoi:</p>
 <ul>
-  <li>✨ esplorare il tuo <b>Tema Natale</b></li>
-  <li>🔮 leggere il tuo <b>oroscopo aggiornato ogni giorno</b></li>
-  <li>💞 scoprire la tua <b>compatibilità con un’altra persona</b></li>
+  <li>esplorare il tuo <b>Tema Natale</b></li>
+  <li>leggere il tuo <b>oroscopo aggiornato ogni giorno</b></li>
+  <li>scoprire la tua <b>compatibilità con un’altra persona</b></li>
 </ul>
-<p>👉 <a href="https://dyana.app/it/tema">Vai al tuo Tema</a></p>
+<p>👉 <a href="https://dyana.app/it/tema">Accedi al tuo Tema</a></p>
 <p>Ogni giorno hai accesso a contenuti aggiornati e puoi consultare il tuo oroscopo completo.</p>
-<p>Sono disponibili crediti gratuiti per sbloccare le letture più approfondite.</p>
+<p>Sono disponibili contenuti aggiuntivi per approfondire le letture.</p>
 """,
         }
 
@@ -249,13 +248,13 @@ def welcome_copy(lang):
 <p>your DYANA space is now active.</p>
 <p>You can:</p>
 <ul>
-  <li>✨ explore your <b>Birth Chart</b></li>
-  <li>🔮 read your <b>updated daily horoscope</b></li>
-  <li>💞 discover your <b>compatibility with someone</b></li>
+  <li>explore your <b>Birth Chart</b></li>
+  <li>read your <b>daily updated horoscope</b></li>
+  <li>discover your <b>compatibility with someone</b></li>
 </ul>
 <p>👉 <a href="https://dyana.app/en/tema">Go to your chart</a></p>
 <p>You can come back every day to check your full horoscope.</p>
-<p>Free credits are available to unlock deeper readings.</p>
+<p>Additional content is available to explore deeper insights.</p>
 """,
     }
 
