@@ -410,6 +410,7 @@ async def sinastria_ai_endpoint(
                     "scope": "sinastria_ai",
                     "tier": body.tier,
                     "lingua": lang,
+                    "report_type": report_type,
                     "nome_A": body.A.nome,
                     "nome_B": body.B.nome,
                     "ora_ignota_A": body.A.ora_ignota,
