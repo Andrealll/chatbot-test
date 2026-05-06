@@ -229,15 +229,16 @@ def welcome_copy(lang):
             "html": """
 <p>Ciao,</p>
 <p>il tuo spazio su DYANA è attivo.</p>
+<p>Hai ricevuto <b>1 credito gratuito</b> per iniziare a esplorare le tue letture.</p>
 <p>Puoi:</p>
 <ul>
-  <li>esplorare il tuo <b>Tema Natale</b></li>
+  <li>scoprire il tuo <b>Tema Natale</b></li>
   <li>leggere il tuo <b>oroscopo aggiornato ogni giorno</b></li>
-  <li>scoprire la tua <b>compatibilità con un’altra persona</b></li>
+  <li>esplorare la tua <b>compatibilità con un’altra persona</b></li>
 </ul>
-<p>👉 <a href="https://dyana.app/it/tema">Accedi al tuo Tema</a></p>
-<p>Ogni giorno hai accesso a contenuti aggiornati e puoi consultare il tuo oroscopo completo.</p>
-<p>Sono disponibili contenuti aggiuntivi per approfondire le letture.</p>
+<p>👉 <a href="https://dyana.app/it/tema">Inizia dal tuo Tema Natale</a></p>
+<p>Ogni giorno puoi tornare su DYANA per nuove indicazioni personalizzate.</p>
+<p>Se vuoi approfondire, puoi sbloccare contenuti premium aggiuntivi.</p>
 """,
         }
 
@@ -246,15 +247,16 @@ def welcome_copy(lang):
         "html": """
 <p>Hi,</p>
 <p>your DYANA space is now active.</p>
+<p>You received <b>1 free credit</b> to start exploring your readings.</p>
 <p>You can:</p>
 <ul>
-  <li>explore your <b>Birth Chart</b></li>
+  <li>discover your <b>Birth Chart</b></li>
   <li>read your <b>daily updated horoscope</b></li>
-  <li>discover your <b>compatibility with someone</b></li>
+  <li>explore your <b>compatibility with someone</b></li>
 </ul>
-<p>👉 <a href="https://dyana.app/en/tema">Go to your chart</a></p>
-<p>You can come back every day to check your full horoscope.</p>
-<p>Additional content is available to explore deeper insights.</p>
+<p>👉 <a href="https://dyana.app/en/tema">Start with your Birth Chart</a></p>
+<p>You can come back every day for new personalized insights.</p>
+<p>If you want to go deeper, you can unlock additional premium content.</p>
 """,
     }
 
