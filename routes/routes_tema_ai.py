@@ -1,9 +1,9 @@
 import json
 import logging
 from typing import Dict, Any, Optional, Literal
-
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from pydantic import BaseModel, Field
+import os
 
 from astrobot_core.ai_tema_claude import call_claude_tema_ai
 from astrobot_core.calcoli import costruisci_tema_natale
@@ -49,7 +49,12 @@ class TemaAIRequest(BaseModel):
         default="base",
         description="base | amore | carriera | psicologia | karma",
     )
-
+    
+class InternalGuestTemaPremiumRequest(BaseModel):
+    order_id: str
+    email: str
+    payload: TemaAIRequest
+    
     class Config:
         allow_population_by_field_name = True
 
@@ -70,7 +75,147 @@ def normalize_report_type(report_type: Optional[str]) -> str:
     if value not in ALLOWED_REPORT_TYPES:
         return "base"
     return value
+    
+@router.post("/internal/guest/tema-premium")
+def internal_guest_tema_premium(
+    body: InternalGuestTemaPremiumRequest,
+    x_internal_secret: str | None = Header(default=None),
+):
+    expected = os.getenv("DYANA_INTERNAL_API_SECRET")
+    if not expected or x_internal_secret != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
+    req = body.payload
+    req.tier = "premium"
+    req.email = body.email
+
+    report_type_norm = normalize_report_type(req.report_type)
+
+    try:
+        ora_raw = (req.ora or "").strip()
+        ora_for_tema = None if req.ora_ignota or not ora_raw else ora_raw
+
+        tema = costruisci_tema_natale(
+            citta=req.citta,
+            data_nascita=req.data,
+            ora_nascita=ora_for_tema,
+            country_code=req.country_code,
+            sistema_case="equal",
+        )
+
+        tema_input = tema.get("input") or {}
+        tema_input["ora_ignota"] = bool(req.ora_ignota or tema_input.get("ora_ignota", False))
+        tema["input"] = tema_input
+
+        pianeti_decod = tema.get("pianeti_decod") or {}
+        asc_mc_case = tema.get("asc_mc_case") or {}
+        aspetti = tema.get("natal_aspects") or []
+
+        tema_vis: Dict[str, Any] = {
+            "meta": {
+                "data": req.data,
+                "ora": None if req.ora_ignota else req.ora,
+                "ora_ignota": bool(req.ora_ignota),
+                "citta": req.citta,
+            }
+        }
+
+        try:
+            tema_vis["chart_png_base64"] = grafico_tema_natal(
+                pianeti_decod=pianeti_decod,
+                asc_mc_case=asc_mc_case,
+                aspetti=aspetti,
+            )
+        except Exception as ge:
+            logger.exception("[INTERNAL_GUEST_TEMA] Errore grafico: %r", ge)
+
+        try:
+            text_payload = build_tema_text_payload(
+                pianeti_decod=pianeti_decod,
+                asc_mc_case=asc_mc_case,
+                aspetti=aspetti,
+                lang=req.lang,
+            )
+            tema_vis["pianeti"] = text_payload.get("pianeti", [])
+            tema_vis["aspetti"] = text_payload.get("aspetti", [])
+        except Exception as te:
+            logger.exception("[INTERNAL_GUEST_TEMA] Errore tema_vis testuale: %r", te)
+
+        payload_ai = build_payload_tema_ai(
+            tema=tema,
+            nome=req.nome,
+            email=body.email,
+            domanda=req.domanda,
+            lang=req.lang,
+            tier="premium",
+            report_type=report_type_norm,
+        )
+
+        out = call_claude_tema_ai(
+            payload_ai,
+            tier="premium",
+            lang=req.lang,
+            report_type=report_type_norm,
+        )
+
+        ai_dbg = out.get("ai_debug") or {}
+        raw_text = ai_dbg.get("raw_text") or ""
+        r = out.get("result")
+
+        parsed = None
+        parse_error = None
+
+        if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
+            r = r.get("result")
+
+        if isinstance(r, dict) and not r.get("error"):
+            parsed = r
+        elif isinstance(r, str) and r.strip():
+            try:
+                tmp = json.loads(r)
+                if isinstance(tmp, dict) and not tmp.get("error"):
+                    parsed = tmp
+                else:
+                    parse_error = "Risposta JSON non valida"
+            except Exception as e:
+                parse_error = f"result string non parseabile: {e}"
+        else:
+            parse_error = f"Risposta non valida type={type(r).__name__}"
+
+        if parsed is None:
+            return {
+                "status": "error",
+                "order_id": body.order_id,
+                "email": body.email,
+                "parse_error": parse_error,
+                "raw_preview": raw_text[:500],
+                "tema_vis": tema_vis,
+            }
+
+        return {
+            "status": "ok",
+            "order_id": body.order_id,
+            "email": body.email,
+            "input": {
+                **req.dict(by_alias=True),
+                "tier": "premium",
+                "report_type_normalized": report_type_norm,
+            },
+            "tema_vis": tema_vis,
+            "payload_ai": payload_ai,
+            "content": parsed,
+            "ai_debug": {
+                "usage": ai_dbg.get("usage") if isinstance(ai_dbg, dict) else None,
+                "model": ai_dbg.get("model") if isinstance(ai_dbg, dict) else None,
+                "elapsed_sec": ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None,
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[INTERNAL_GUEST_TEMA] Errore generazione order_id=%r", body.order_id)
+        raise HTTPException(status_code=500, detail=f"Errore generazione Tema guest: {e}")
 
 @router.post("/tema_ai")
 def tema_ai_endpoint(

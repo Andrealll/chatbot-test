@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from pydantic import BaseModel
 
 from astrobot_core.kb.tema_kb import build_aspetti_natali_con_kb
@@ -736,3 +736,138 @@ async def sinastria_ai_endpoint(
                 log_err,
             )
         raise
+        
+        
+class InternalGuestSinastriaRequest(BaseModel):
+    order_id: str
+    email: str
+    payload: SinastriaAIRequest
+
+
+@router.post("/internal/guest/sinastria-premium")
+def internal_guest_sinastria(
+    body: InternalGuestSinastriaRequest,
+    x_internal_secret: str | None = Header(default=None),
+):
+    expected = os.getenv("DYANA_INTERNAL_API_SECRET")
+    if not expected or x_internal_secret != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    req = body.payload
+    req.tier = "premium"
+
+    lang = (req.lang or "it").strip().lower()
+    if lang not in ("it", "en"):
+        lang = "it"
+
+    report_type = (req.report_type or "").strip().lower()
+    if report_type not in {"amore", "amicizia", "famiglia", "lavoro"}:
+        report_type = "amore"
+
+    try:
+        def _build_dt(data_str: str, ora_str: str, ora_ignota: bool) -> datetime:
+            if ora_ignota or not ora_str:
+                return datetime.fromisoformat(f"{data_str} 12:00")
+            return datetime.fromisoformat(f"{data_str} {ora_str}")
+
+        dt_A = _build_dt(req.A.data, req.A.ora, req.A.ora_ignota)
+        dt_B = _build_dt(req.B.data, req.B.ora, req.B.ora_ignota)
+
+        sinastria_data = calcola_sinastria(
+            dt_A,
+            req.A.citta,
+            dt_B,
+            req.B.citta,
+            country_code_A=req.A.country_code,
+            country_code_B=req.B.country_code,
+        )
+
+        sinastria_inner = sinastria_data.get("sinastria", {}) or {}
+        temaA = sinastria_data.get("A") or {}
+        temaB = sinastria_data.get("B") or {}
+
+        def _compress_tema(tema: Dict[str, Any], ora_ignota: bool) -> Dict[str, Any]:
+            pianeti_decod = tema.get("pianeti_decod") or {}
+            natal_houses = tema.get("natal_houses") or {}
+            pianeti_compatti: Dict[str, Any] = {}
+
+            if isinstance(pianeti_decod, dict):
+                for nome, info in pianeti_decod.items():
+                    if not isinstance(info, dict):
+                        continue
+                    if ora_ignota and nome == "Ascendente":
+                        continue
+
+                    item: Dict[str, Any] = {"segno": info.get("segno")}
+
+                    if not ora_ignota:
+                        casa_val = info.get("casa")
+                        if casa_val is None and isinstance(natal_houses, dict):
+                            casa_val = natal_houses.get(nome)
+                        item["casa"] = casa_val
+
+                    pianeti_compatti[nome] = item
+
+            return {
+                "data": tema.get("data"),
+                "pianeti": pianeti_compatti,
+            }
+
+        top_stretti_raw = sinastria_inner.get("top_stretti", []) or []
+
+        if req.A.ora_ignota or req.B.ora_ignota:
+            top_stretti_raw = [
+                asp for asp in top_stretti_raw
+                if isinstance(asp, dict)
+                and asp.get("pianeta1") != "Ascendente"
+                and asp.get("pianeta2") != "Ascendente"
+            ]
+
+        top_stretti_compatti = []
+        for asp in top_stretti_raw:
+            if isinstance(asp, dict):
+                top_stretti_compatti.append({
+                    "pianetaA": asp.get("pianeta1"),
+                    "pianetaB": asp.get("pianeta2"),
+                    "tipo": asp.get("tipo"),
+                    "orb": asp.get("orb", asp.get("delta")),
+                })
+
+        payload_ai: Dict[str, Any] = {
+            "meta": {
+                "scope": "sinastria_ai",
+                "tier": "premium",
+                "lingua": lang,
+                "report_type": report_type,
+                "nome_A": req.A.nome,
+                "nome_B": req.B.nome,
+                "ora_ignota_A": req.A.ora_ignota,
+                "ora_ignota_B": req.B.ora_ignota,
+            },
+            "sinastria": {
+                "A": _compress_tema(temaA, req.A.ora_ignota),
+                "B": _compress_tema(temaB, req.B.ora_ignota),
+                "top_stretti": top_stretti_compatti,
+            },
+        }
+
+        sinastria_ai = call_claude_sinastria_ai(payload_ai, report_type=report_type)
+
+        return {
+            "status": "ok",
+            "order_id": body.order_id,
+            "email": body.email,
+            "input": {
+                **req.dict(),
+                "tier": "premium",
+                "report_type_normalized": report_type,
+            },
+            "payload_ai": payload_ai,
+            "sinastria_ai": sinastria_ai,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[INTERNAL_GUEST_SINASTRIA] Errore generazione order_id=%r", body.order_id)
+        raise HTTPException(status_code=500, detail=f"Errore generazione Sinastria guest: {e}")

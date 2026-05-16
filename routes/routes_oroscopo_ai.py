@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, Dict, Optional, List, Literal
-
+import os
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field, validator
 from dataclasses import dataclass
@@ -1433,3 +1433,90 @@ async def oroscopo_ai_endpoint(
             grafico=None,
             tabella_aspetti=None,
         )
+        
+        
+class InternalGuestOroscopoRequest(BaseModel):
+    order_id: str
+    email: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/internal/guest/{periodo}")
+async def internal_guest_oroscopo_premium(
+    periodo: str,
+    body: InternalGuestOroscopoRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    internal_secret = os.getenv("DYANA_INTERNAL_API_SECRET")
+    received_secret = request.headers.get("x-internal-secret")
+
+    if not internal_secret or received_secret != internal_secret:
+        raise HTTPException(status_code=403, detail="Internal secret non valido.")
+
+    scope: Periodo = _normalize_period(periodo)
+
+    payload_dict = dict(body.payload or {})
+    payload_dict["tier"] = "premium"
+    payload_dict["email"] = body.email or payload_dict.get("email")
+    payload_dict["lang"] = _normalize_lang(payload_dict.get("lang"))
+
+    data_input = OroscopoBaseInput(**payload_dict)
+    lang = _normalize_lang(data_input.lang)
+    tier: Tier = "premium"
+
+    engine_result = _run_oroscopo_engine(
+        scope=scope,
+        tier=tier,
+        data_input=data_input,
+    )
+
+    payload_ai = _build_payload_ai(
+        scope=scope,
+        tier=tier,
+        engine_result=engine_result,
+        data_input=data_input,
+        lang=lang,
+    )
+
+    oroscopo_ai = _call_oroscopo_ai_claude(payload_ai)
+
+    grafico_http = None
+    tabella_aspetti_http = None
+
+    try:
+        oroscopo_struct = engine_result.get("oroscopo_struct") or {}
+        periodi_struct = oroscopo_struct.get("periodi") or {}
+        period_block_http = list(periodi_struct.values())[0] if isinstance(periodi_struct, dict) and periodi_struct else None
+
+        if isinstance(period_block_http, dict):
+            grafico_http = _build_grafico_http_from_period_block(
+                period_block_http,
+                scope=scope,
+                payload=data_input,
+                lang=lang,
+            )
+            tabella_aspetti_http = _build_tabella_aspetti_http_from_period_block(
+                period_block_http,
+                lang=lang,
+            )
+    except Exception as e:
+        logger.exception("[OROSCOPO_AI][GUEST] Errore grafico/tabella: %r", e)
+
+    return {
+        "status": "ok",
+        "order_id": body.order_id,
+        "scope": scope,
+        "engine": "ai",
+        "input": data_input.dict(),
+        "engine_result": engine_result,
+        "payload_ai": payload_ai,
+        "oroscopo_ai": oroscopo_ai,
+        "billing": {
+            "tier": "premium",
+            "scope": scope,
+            "mode": "guest_paid",
+            "cost_credits": 0,
+        },
+        "grafico": grafico_http,
+        "tabella_aspetti": tabella_aspetti_http,
+    }
