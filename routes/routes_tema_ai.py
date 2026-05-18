@@ -90,6 +90,29 @@ def internal_guest_tema_premium(
     req.email = body.email
 
     report_type_norm = normalize_report_type(req.report_type)
+    log_email = (body.email or req.email or "").strip().lower() or None
+
+    guest_request_log_base: Dict[str, Any] = {
+        "body": {
+            **req.dict(by_alias=True),
+            "email": log_email,
+            "tier": "premium",
+            "report_type_normalized": report_type_norm,
+        },
+        "client_source": "internal_guest_order",
+        "client_session": None,
+        "email": log_email,
+        "tier": "premium",
+        "feature": TEMA_AI_FEATURE_KEY,
+        "guest_order": {
+            "order_id": body.order_id,
+            "product_type": "tema",
+            "pack_id": "tema_single",
+            "mode": "guest_paid",
+            "email": log_email,
+            "lang": req.lang,
+        },
+    }
 
     try:
         ora_raw = (req.ora or "").strip()
@@ -127,7 +150,7 @@ def internal_guest_tema_premium(
                 aspetti=aspetti,
             )
         except Exception as ge:
-            logger.exception("[INTERNAL_GUEST_TEMA] Errore grafico: %r", ge)
+            logger.exception("[INTERNAL_GUEST_TEMA] Errore grafico order_id=%r err=%r", body.order_id, ge)
 
         try:
             text_payload = build_tema_text_payload(
@@ -139,12 +162,12 @@ def internal_guest_tema_premium(
             tema_vis["pianeti"] = text_payload.get("pianeti", [])
             tema_vis["aspetti"] = text_payload.get("aspetti", [])
         except Exception as te:
-            logger.exception("[INTERNAL_GUEST_TEMA] Errore tema_vis testuale: %r", te)
+            logger.exception("[INTERNAL_GUEST_TEMA] Errore tema_vis testuale order_id=%r err=%r", body.order_id, te)
 
         payload_ai = build_payload_tema_ai(
             tema=tema,
             nome=req.nome,
-            email=body.email,
+            email=log_email,
             domanda=req.domanda,
             lang=req.lang,
             tier="premium",
@@ -161,6 +184,13 @@ def internal_guest_tema_premium(
         ai_dbg = out.get("ai_debug") or {}
         raw_text = ai_dbg.get("raw_text") or ""
         r = out.get("result")
+
+        usage = (ai_dbg.get("usage") or {}) if isinstance(ai_dbg, dict) else {}
+        tokens_in = int(usage.get("input_tokens", 0) or 0)
+        tokens_out = int(usage.get("output_tokens", 0) or 0)
+        elapsed_sec = ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None
+        model = ai_dbg.get("model") if isinstance(ai_dbg, dict) else None
+        latency_ms = (float(elapsed_sec) * 1000.0) if isinstance(elapsed_sec, (int, float)) else None
 
         parsed = None
         parse_error = None
@@ -183,21 +213,85 @@ def internal_guest_tema_premium(
             parse_error = f"Risposta non valida type={type(r).__name__}"
 
         if parsed is None:
+            try:
+                log_usage_event(
+                    user_id=f"anon-guest-order-{body.order_id}",
+                    feature=TEMA_AI_FEATURE_KEY,
+                    tier="premium",
+                    role="guest",
+                    is_guest=True,
+                    billing_mode="guest_paid",
+                    cost_paid_credits=0,
+                    cost_free_credits=0,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    model=model,
+                    latency_ms=latency_ms,
+                    paid_credits_before=None,
+                    paid_credits_after=None,
+                    free_credits_used_before=None,
+                    free_credits_used_after=None,
+                    request_json={
+                        **guest_request_log_base,
+                        "ai_call": {
+                            "tokens_in": tokens_in,
+                            "tokens_out": tokens_out,
+                        },
+                        "error": {
+                            "type": "parse_error",
+                            "detail": parse_error,
+                            "raw_preview": raw_text[:500],
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error parse order_id=%r err=%r", body.order_id, e)
+
             return {
                 "status": "error",
                 "order_id": body.order_id,
-                "email": body.email,
+                "email": log_email,
                 "parse_error": parse_error,
                 "raw_preview": raw_text[:500],
                 "tema_vis": tema_vis,
             }
 
+        try:
+            log_usage_event(
+                user_id=f"anon-guest-order-{body.order_id}",
+                feature=TEMA_AI_FEATURE_KEY,
+                tier="premium",
+                role="guest",
+                is_guest=True,
+                billing_mode="guest_paid",
+                cost_paid_credits=0,
+                cost_free_credits=0,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                model=model,
+                latency_ms=latency_ms,
+                paid_credits_before=None,
+                paid_credits_after=None,
+                free_credits_used_before=None,
+                free_credits_used_after=None,
+                request_json={
+                    **guest_request_log_base,
+                    "ai_call": {
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error success order_id=%r err=%r", body.order_id, e)
+
         return {
             "status": "ok",
             "order_id": body.order_id,
-            "email": body.email,
+            "email": log_email,
             "input": {
                 **req.dict(by_alias=True),
+                "email": log_email,
                 "tier": "premium",
                 "report_type_normalized": report_type_norm,
             },
@@ -205,9 +299,9 @@ def internal_guest_tema_premium(
             "payload_ai": payload_ai,
             "content": parsed,
             "ai_debug": {
-                "usage": ai_dbg.get("usage") if isinstance(ai_dbg, dict) else None,
-                "model": ai_dbg.get("model") if isinstance(ai_dbg, dict) else None,
-                "elapsed_sec": ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None,
+                "usage": usage,
+                "model": model,
+                "elapsed_sec": elapsed_sec,
             },
         }
 
@@ -215,8 +309,39 @@ def internal_guest_tema_premium(
         raise
     except Exception as e:
         logger.exception("[INTERNAL_GUEST_TEMA] Errore generazione order_id=%r", body.order_id)
-        raise HTTPException(status_code=500, detail=f"Errore generazione Tema guest: {e}")
 
+        try:
+            log_usage_event(
+                user_id=f"anon-guest-order-{body.order_id}",
+                feature=TEMA_AI_FEATURE_KEY,
+                tier="premium",
+                role="guest",
+                is_guest=True,
+                billing_mode="guest_paid",
+                cost_paid_credits=0,
+                cost_free_credits=0,
+                tokens_in=0,
+                tokens_out=0,
+                model=None,
+                latency_ms=None,
+                paid_credits_before=None,
+                paid_credits_after=None,
+                free_credits_used_before=None,
+                free_credits_used_after=None,
+                request_json={
+                    **guest_request_log_base,
+                    "error": {
+                        "type": "unexpected_exception",
+                        "detail": str(e),
+                    },
+                },
+            )
+        except Exception as log_err:
+            logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error exception order_id=%r err=%r", body.order_id, log_err)
+
+        raise HTTPException(status_code=500, detail=f"Errore generazione Tema guest: {e}")
+        
+        
 @router.post("/tema_ai")
 def tema_ai_endpoint(
     body: TemaAIRequest,
@@ -229,13 +354,26 @@ def tema_ai_endpoint(
     client_source = request.headers.get("x-client-source") or "unknown"
     client_session = request.headers.get("x-client-session")
     report_type_norm = normalize_report_type(body.report_type)
+
+    log_email = (
+        (body.email or "")
+        or (getattr(user, "email", "") or "")
+        or (getattr(user, "user_email", "") or "")
+        or ((getattr(user, "user_metadata", {}) or {}).get("email", ""))
+    ).strip().lower() or None
+
     request_log_base: Dict[str, Any] = {
         "body": {
             **body.dict(by_alias=True),
+            "email": log_email,
+            "tier": body.tier,
             "report_type_normalized": report_type_norm,
         },
         "client_source": client_source,
         "client_session": client_session,
+        "email": log_email,
+        "tier": body.tier,
+        "feature": TEMA_AI_FEATURE_KEY,
     }
     
 
@@ -272,10 +410,9 @@ def tema_ai_endpoint(
             elif decision.mode == "free_trial":
                 billing_mode = "free_trial"
             else:
-                raise HTTPException(
-                    status_code=402,
-                    detail="INSUFFICIENT_CREDITS",
-                )
+                billing_mode = getattr(decision, "mode", None) or "insufficient_credits"
+                raise HTTPException(status_code=402, detail="INSUFFICIENT_CREDITS")
+                
         else:
             billing_mode = "free"
             decision = None
@@ -358,7 +495,7 @@ def tema_ai_endpoint(
             payload_ai = build_payload_tema_ai(
                 tema=tema,
                 nome=body.nome,
-                email=body.email,
+                email=log_email,
                 domanda=body.domanda,
                 lang=body.lang,
                 tier=body.tier,
@@ -468,19 +605,58 @@ def tema_ai_endpoint(
         # ====================================================
         # 4) JSON non valido / vuoto
         # ====================================================
-        logger.error(
-            "[TEMA_AI PARSE FAILED] tier=%s report_type=%s parse_error=%s raw_preview=%s",
-            body.tier,
-            report_type_norm,
-            parse_error,
-            raw_text[:1000] if raw_text else None,
-        )
         if parsed is None:
+            logger.error(
+                "[TEMA_AI PARSE FAILED] tier=%s report_type=%s parse_error=%s raw_preview=%s",
+                body.tier,
+                report_type_norm,
+                parse_error,
+                raw_text[:1000] if raw_text else None,
+            )
+            try:
+                log_usage_event(
+                    user_id=user.sub,
+                    feature=TEMA_AI_FEATURE_KEY,
+                    tier=body.tier,
+                    role=role,
+                    is_guest=is_guest,
+                    billing_mode=billing_mode,
+                    cost_paid_credits=0,
+                    cost_free_credits=0,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    model=model,
+                    latency_ms=latency_ms,
+                    paid_credits_before=paid_credits_before,
+                    paid_credits_after=(state.paid_credits if state is not None else None),
+                    free_credits_used_before=free_credits_used_before,
+                    free_credits_used_after=(state.free_tries_used if state is not None else None),
+                    request_json={
+                        **request_log_base,
+                        "ai_call": {
+                            "tokens_in": tokens_in,
+                            "tokens_out": tokens_out,
+                        },
+                        "error": {
+                            "type": "parse_error",
+                            "detail": parse_error,
+                            "raw_preview": raw_text[:500],
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.exception("[TEMA_AI] log_usage_event error (parse_error): %r", e)            
+            
             return {
                 "status": "error",
                 "scope": "tema_ai",
                 "message": "JSON non valido" if raw_text else "Claude non ha restituito testo.",
-                "input": body.dict(by_alias=True),
+                "input": {
+                    **body.dict(by_alias=True),
+                    "email": log_email,
+                    "tier": body.tier,
+                    "report_type_normalized": report_type_norm,
+                },
                 "tema_vis": tema_vis,
                 "payload_ai": payload_ai,
                 "result": {
@@ -618,7 +794,7 @@ def tema_ai_endpoint(
                 tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
-                billing_mode="error",
+                billing_mode=f"error:{billing_mode}",
                 cost_paid_credits=0,
                 cost_free_credits=0,
                 tokens_in=0,
@@ -655,7 +831,7 @@ def tema_ai_endpoint(
                 tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
-                billing_mode="error",
+                billing_mode=f"error:{billing_mode}",
                 cost_paid_credits=0,
                 cost_free_credits=0,
                 tokens_in=0,
