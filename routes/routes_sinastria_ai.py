@@ -48,15 +48,101 @@ class Persona(BaseModel):
     nome: Optional[str] = None
     ora_ignota: bool = False
 
-
 class SinastriaAIRequest(BaseModel):
     A: Persona
     B: Persona
     tier: str = "free"
     lang: str = "it"
+    domanda:  Optional[str] = None
     report_type: Optional[str] = None
+    email: Optional[str] = None
+    output_mode: Optional[str] = None
+
+def _extract_log_email(body: Any = None, user: Any = None) -> Optional[str]:
+    meta = getattr(user, "user_metadata", None) or {}
+    values = [
+        getattr(body, "email", None),
+        getattr(user, "email", None),
+        getattr(user, "user_email", None),
+        meta.get("email") if isinstance(meta, dict) else None,
+    ]
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+    return None
 
 
+def _extract_ai_debug(out: Any) -> Dict[str, Any]:
+    if not isinstance(out, dict):
+        return {}
+    dbg = out.get("ai_debug") or out.get("debug")
+    if isinstance(dbg, dict):
+        return dbg
+    meta = out.get("meta")
+    if isinstance(meta, dict):
+        dbg = meta.get("ai_debug") or meta.get("debug")
+        if isinstance(dbg, dict):
+            return dbg
+    inner = out.get("result")
+    if isinstance(inner, dict):
+        dbg = inner.get("ai_debug") or inner.get("debug")
+        if isinstance(dbg, dict):
+            return dbg
+    return {}
+
+
+def _extract_usage(out: Any) -> tuple[int, int, Optional[str], Optional[float], str]:
+    dbg = _extract_ai_debug(out)
+    usage = dbg.get("usage") or {}
+    tokens_in = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+    tokens_out = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+    model = dbg.get("model")
+    elapsed_sec = dbg.get("elapsed_sec") or dbg.get("latency_sec")
+    latency_ms = float(elapsed_sec) * 1000.0 if isinstance(elapsed_sec, (int, float)) else None
+    raw_text = dbg.get("raw_text") or ""
+    return int(tokens_in or 0), int(tokens_out or 0), model, latency_ms, raw_text
+
+
+def _parse_sinastria_ai(out: Any) -> tuple[Optional[Dict[str, Any]], Optional[str], str]:
+    raw_text = _extract_ai_debug(out).get("raw_text") or ""
+    r = out.get("result") if isinstance(out, dict) else out
+
+    if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
+        r = r.get("result")
+
+    if isinstance(r, dict) and not r.get("error"):
+        return r, None, raw_text
+
+    if isinstance(r, str) and r.strip():
+        try:
+            tmp = json.loads(r)
+            if isinstance(tmp, dict) and not tmp.get("error"):
+                return tmp, None, raw_text
+            return None, "Risposta JSON non valida", raw_text
+        except Exception as e:
+            return None, f"result string non parseabile: {e}", raw_text
+
+    return None, f"Risposta non valida type={type(r).__name__}", raw_text
+
+def _call_sinastria_ai_with_retry(payload_ai: Dict[str, Any], report_type: str, max_attempts: int = 2):
+    last = {"out": None, "parsed": None, "parse_error": None, "raw_text": "", "tokens_in": 0, "tokens_out": 0, "model": None, "latency_ms": None}
+    attempts = []
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            out = call_claude_sinastria_ai(payload_ai, report_type=report_type)
+            tokens_in, tokens_out, model, latency_ms, raw_text = _extract_usage(out)
+            parsed, parse_error, raw_text = _parse_sinastria_ai(out)
+            attempts.append({"attempt": attempt, "ok": parsed is not None, "parse_error": parse_error})
+            last = {"out": out, "parsed": parsed, "parse_error": parse_error, "raw_text": raw_text, "tokens_in": tokens_in, "tokens_out": tokens_out, "model": model, "latency_ms": latency_ms}
+            if parsed is not None:
+                return last, attempts
+        except Exception as e:
+            attempts.append({"attempt": attempt, "ok": False, "exception": str(e)})
+            if attempt == max_attempts:
+                raise
+
+    return last, attempts
 # ==========================
 #  ROUTE PRINCIPALE
 # ==========================
@@ -72,10 +158,13 @@ async def sinastria_ai_endpoint(
     client_source = request.headers.get("x-client-source") or "unknown"
     client_session = request.headers.get("x-client-session")
 
+    log_email = _extract_log_email(body, user)
+
     request_log_base: Dict[str, Any] = {
         "body": body.dict(),
         "client_source": client_source,
         "client_session": client_session,
+        "email": log_email,
     }
 
     lang = (body.lang or "it").strip().lower()
@@ -86,7 +175,8 @@ async def sinastria_ai_endpoint(
 
     if report_type not in {"amore", "amicizia", "famiglia", "lavoro"}:
         report_type = "amore"
-
+    
+    output_mode = "dyana_chat" if str(body.output_mode or "").strip().lower() == "dyana_chat" else "standard"
 
     state = None
     decision: Optional[PremiumDecision] = None
@@ -411,6 +501,8 @@ async def sinastria_ai_endpoint(
                     "tier": body.tier,
                     "lingua": lang,
                     "report_type": report_type,
+                    "output_mode": output_mode,
+                    "domanda": body.domanda,
                     "nome_A": body.A.nome,
                     "nome_B": body.B.nome,
                     "ora_ignota_A": body.A.ora_ignota,
@@ -462,9 +554,84 @@ async def sinastria_ai_endpoint(
         # ====================================================
         # 3) Chiamata Claude
         # ====================================================
-        sinastria_ai = call_claude_sinastria_ai(payload_ai, report_type=report_type)
+        ai_result, ai_attempts = _call_sinastria_ai_with_retry(payload_ai, report_type=report_type)
+
+        sinastria_ai = ai_result["out"]
+        parsed_ai = ai_result["parsed"]
+        parse_error = ai_result["parse_error"]
+        raw_text = ai_result["raw_text"]
+        tokens_in = ai_result["tokens_in"]
+        tokens_out = ai_result["tokens_out"]
+        model = ai_result["model"]
+        latency_ms = ai_result["latency_ms"]
+
+        if parsed_ai is None:
+            try:
+                log_usage_event(
+                    user_id=user.sub,
+                    feature=SINASTRIA_FEATURE_KEY,
+                    tier=body.tier,
+                    role=role,
+                    is_guest=is_guest,
+                    billing_mode=billing_mode,
+                    cost_paid_credits=0,
+                    cost_free_credits=0,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    model=model,
+                    latency_ms=latency_ms,
+                    paid_credits_before=paid_credits_before,
+                    paid_credits_after=paid_credits_before,
+                    free_credits_used_before=free_credits_used_before,
+                    free_credits_used_after=free_credits_used_before,
+                    request_json={
+                        **request_log_base,
+                        "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+                        "ai_attempts": ai_attempts,
+                        "error": {
+                            "type": "parse_error",
+                            "detail": parse_error,
+                            "raw_preview": raw_text[:500],
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.exception("[SINASTRIA_AI] log_usage_event error (parse_error): %r", e)
+
+            return {
+                "status": "error",
+                "scope": "sinastria_ai",
+                "input": body.dict(),
+                "payload_ai": payload_ai,
+                "sinastria_ai": {
+                    "result": {"content": None},
+                    "error": "parse_error",
+                    "parse_error": parse_error,
+                    "raw_preview": raw_text[:500],
+                },
+                "sinastria_vis": sinastria_vis,
+                "chart_sinastria_base64": None,
+                "billing": {
+                    "mode": billing_mode,
+                    "remaining_credits": state.paid_credits if state is not None else None,
+                    "cost_credits": 0,
+                    "cost_paid_credits": 0,
+                    "cost_free_credits": 0,
+                },
+            }
+
+        cost_paid_credits = 0
+        cost_free_credits = 0
+        cost_credits = 0
 
         if body.tier == "premium" and decision is not None:
+            if decision.mode == "combined_wallet":
+                cost_paid_credits = SINASTRIA_PREMIUM_COST
+                cost_credits = SINASTRIA_PREMIUM_COST
+            elif decision.mode == "free_trial":
+                cost_free_credits = SINASTRIA_PREMIUM_COST
+                cost_credits = SINASTRIA_PREMIUM_COST
+
             apply_premium_consumption(
                 state,
                 decision,
@@ -475,85 +642,12 @@ async def sinastria_ai_endpoint(
             paid_credits_after = state.paid_credits
             free_credits_used_after = state.free_tries_used
 
-        # ====================================================
-        # 3b) Estrazione usage
-        # ====================================================
-        tokens_in = 0
-        tokens_out = 0
-        model = None
-        latency_ms: Optional[float] = None
+        sinastria_ai["result"] = parsed_ai
 
-        try:
-            ai_debug_block = None
-
-            if isinstance(sinastria_ai, dict):
-                ai_debug_block = sinastria_ai.get("ai_debug") or sinastria_ai.get("debug")
-
-                if ai_debug_block is None:
-                    meta_block = sinastria_ai.get("meta")
-                    if isinstance(meta_block, dict):
-                        ai_debug_block = meta_block.get("ai_debug") or meta_block.get("debug")
-
-                if ai_debug_block is None:
-                    inner = sinastria_ai.get("result")
-                    if isinstance(inner, dict):
-                        ai_debug_block = inner.get("ai_debug") or inner.get("debug")
-
-            if isinstance(ai_debug_block, dict):
-                usage = ai_debug_block.get("usage") or {}
-                tokens_in = (
-                    usage.get("input_tokens")
-                    or usage.get("prompt_tokens")
-                    or 0
-                ) or 0
-                tokens_out = (
-                    usage.get("output_tokens")
-                    or usage.get("completion_tokens")
-                    or 0
-                ) or 0
-
-                model = ai_debug_block.get("model")
-                elapsed_sec = (
-                    ai_debug_block.get("elapsed_sec")
-                    or ai_debug_block.get("latency_sec")
-                )
-                if isinstance(elapsed_sec, (int, float)):
-                    latency_ms = float(elapsed_sec) * 1000.0
-        except Exception:
-            tokens_in = 0
-            tokens_out = 0
-            model = None
-            latency_ms = None
-
-        # ====================================================
-        # 3c) Billing calcolato
-        # ====================================================
-        cost_paid_credits = 0
-        cost_free_credits = 0
-        cost_credits = 0
-
-        if body.tier == "premium" and decision is not None:
-            if decision.mode == "combined_wallet":
-                cost_paid_credits = SINASTRIA_PREMIUM_COST
-                cost_credits = SINASTRIA_PREMIUM_COST
-            elif decision.mode == "free_trial":
-                cost_paid_credits = 0
-                cost_free_credits = 0
-                cost_credits = 0
-            elif decision.mode == "premium_plan":
-                cost_paid_credits = 0
-                cost_free_credits = 0
-                cost_credits = 0
-
-        # ====================================================
-        # 3d) Logging usage SU SUCCESSO
-        # ====================================================
         request_log_success = {
             **request_log_base,
-            "ai_call": {
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-            },
+            "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+            "ai_attempts": ai_attempts,
         }
 
         try:
@@ -571,20 +665,16 @@ async def sinastria_ai_endpoint(
                 model=model,
                 latency_ms=latency_ms,
                 paid_credits_before=paid_credits_before,
-                paid_credits_after=(
-                    state.paid_credits if state is not None else None
-                ),
+                paid_credits_after=state.paid_credits if state is not None else None,
                 free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=(
-                    state.free_tries_used if state is not None else None
-                ),
+                free_credits_used_after=state.free_tries_used if state is not None else None,
                 request_json=request_log_success,
             )
         except Exception as e:
             logger.exception("[SINASTRIA_AI] log_usage_event error (success): %r", e)
-
+            
         # ====================================================
-        # 3e) Grafico sinastria
+        # 3a) Grafico sinastria
         # ====================================================
         chart_sinastria_base64 = None
         try:
@@ -671,7 +761,7 @@ async def sinastria_ai_endpoint(
                 tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
-                billing_mode="error",
+                billing_mode=f"error:{billing_mode}",
                 cost_paid_credits=0,
                 cost_free_credits=0,
                 tokens_in=0,
@@ -709,7 +799,7 @@ async def sinastria_ai_endpoint(
                 tier=getattr(body, "tier", "unknown"),
                 role=role,
                 is_guest=is_guest,
-                billing_mode="error",
+                billing_mode=f"error:{billing_mode}",
                 cost_paid_credits=0,
                 cost_free_credits=0,
                 tokens_in=0,
@@ -763,7 +853,7 @@ def internal_guest_sinastria(
     report_type = (req.report_type or "").strip().lower()
     if report_type not in {"amore", "amicizia", "famiglia", "lavoro"}:
         report_type = "amore"
-
+    output_mode = "dyana_chat" if str(req.output_mode or "").strip().lower() == "dyana_chat" else "standard"
     try:
         def _build_dt(data_str: str, ora_str: str, ora_ignota: bool) -> datetime:
             if ora_ignota or not ora_str:
@@ -839,6 +929,8 @@ def internal_guest_sinastria(
                 "tier": "premium",
                 "lingua": lang,
                 "report_type": report_type,
+                "output_mode": output_mode,
+                "domanda": req.domanda,
                 "nome_A": req.A.nome,
                 "nome_B": req.B.nome,
                 "ora_ignota_A": req.A.ora_ignota,
@@ -851,7 +943,86 @@ def internal_guest_sinastria(
             },
         }
 
-        sinastria_ai = call_claude_sinastria_ai(payload_ai, report_type=report_type)
+        ai_result, ai_attempts = _call_sinastria_ai_with_retry(payload_ai, report_type=report_type)
+
+        sinastria_ai = ai_result["out"]
+        parsed_ai = ai_result["parsed"]
+        parse_error = ai_result["parse_error"]
+        raw_text = ai_result["raw_text"]
+        tokens_in = ai_result["tokens_in"]
+        tokens_out = ai_result["tokens_out"]
+        model = ai_result["model"]
+        latency_ms = ai_result["latency_ms"]
+        request_log_base = {
+            "body": req.dict(),
+            "email": body.email.strip().lower(),
+            "order_id": body.order_id,
+            "client_source": "internal_guest_order",
+        }
+
+        if parsed_ai is None:
+            try:
+                log_usage_event(
+                    user_id=f"guest-order-{body.order_id}",
+                    feature=SINASTRIA_FEATURE_KEY,
+                    tier="premium",
+                    role="guest",
+                    is_guest=True,
+                    billing_mode="guest_paid",
+                    cost_paid_credits=0,
+                    cost_free_credits=0,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    model=model,
+                    latency_ms=latency_ms,
+                    request_json={
+                        **request_log_base,
+                        "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+                        "ai_attempts": ai_attempts,
+                        "error": {
+                            "type": "parse_error",
+                            "detail": parse_error,
+                            "raw_preview": raw_text[:500],
+                        },
+                    },
+                )
+            except Exception as log_err:
+                logger.exception("[INTERNAL_GUEST_SINASTRIA] log_usage_event parse_error: %r", log_err)
+
+            return {
+                "status": "error",
+                "order_id": body.order_id,
+                "email": body.email,
+                "parse_error": parse_error,
+                "raw_preview": raw_text[:500],
+                "payload_ai": payload_ai,
+                "sinastria_ai": {"result": {"content": None}},
+            }
+
+        sinastria_ai["result"] = parsed_ai
+
+        try:
+            log_usage_event(
+                user_id=f"guest-order-{body.order_id}",
+                feature=SINASTRIA_FEATURE_KEY,
+                tier="premium",
+                role="guest",
+                is_guest=True,
+                billing_mode="guest_paid",
+                cost_paid_credits=0,
+                cost_free_credits=0,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                model=model,
+                latency_ms=latency_ms,
+                request_json={
+                    **request_log_base,
+                    "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+                    "ai_attempts": ai_attempts,
+                },
+            )
+        except Exception as log_err:
+            logger.exception("[INTERNAL_GUEST_SINASTRIA] log_usage_event success: %r", log_err)
 
         return {
             "status": "ok",

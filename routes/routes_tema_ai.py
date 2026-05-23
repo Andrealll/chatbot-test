@@ -42,6 +42,7 @@ class TemaAIRequest(BaseModel):
     nome: Optional[str] = None
     email: Optional[str] = None
     domanda: Optional[str] = None
+    output_mode: Optional[Literal["standard", "dyana_chat"]] = "standard"
     lang: Literal["it", "en"] = "it"
     tier: Literal["free", "premium"] = "free"
     ora_ignota: bool = False
@@ -172,6 +173,7 @@ def internal_guest_tema_premium(
             lang=req.lang,
             tier="premium",
             report_type=report_type_norm,
+            output_mode=req.output_mode,
         )
 
         out = call_claude_tema_ai(
@@ -348,6 +350,8 @@ def tema_ai_endpoint(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    
+    print("[TEMA_AI_ROUTE_HIT]", body.output_mode, flush=True)
     sub = str(getattr(user, "sub", "") or "")
     is_guest = sub.startswith("anon-")
     role = getattr(user, "role", None)
@@ -487,7 +491,7 @@ def tema_ai_endpoint(
                 status_code=500,
                 detail=f"Errore nella costruzione del tema_vis: {e}",
             )
-
+        logger.warning("[TEMA_AI][OUTPUT_MODE_DEBUG] body.output_mode=%s", body.output_mode)
         # ====================================================
         # 2) Payload AI
         # ====================================================
@@ -500,6 +504,7 @@ def tema_ai_endpoint(
                 lang=body.lang,
                 tier=body.tier,
                 report_type=report_type_norm,
+                output_mode=body.output_mode,
             )
         except Exception as e:
             logger.exception("[TEMA_AI] Errore build payload AI")

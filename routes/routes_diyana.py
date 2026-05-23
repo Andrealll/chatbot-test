@@ -6,11 +6,16 @@ import os
 import httpx
 from fastapi import APIRouter, HTTPException
 
-
 from astrobot_core.ai_diyana_qa import (
     QaAnswerRequest,
     QaAnswerResponse,
     process_diyana_qa,
+)
+
+from astrobot_core.ai_dyana_classifier import (
+    DyanaIntentClassifierRequest,
+    DyanaIntentClassifierResponse,
+    process_diyana_intent_classifier,
 )
 
 from diyana_wallet import (
@@ -186,6 +191,25 @@ def log_diyana_qa_event(req: QaAnswerRequest, resp: QaAnswerResponse) -> None:
         logger.exception("[DYANA-LOG] Errore inatteso in log_diyana_qa_event: %s", e)
 
 
+# ============================================================================
+# INTENT CLASSIFIER
+# ============================================================================
+# Route pubblica minima.
+# Prompt, schema, chiamata Claude e fallback stanno in astrobot_core.ai_diyana_classifier
+# ============================================================================
+
+@router.post("/intent-classifier", response_model=DyanaIntentClassifierResponse)
+async def diyana_intent_classifier(req: DyanaIntentClassifierRequest):
+    try:
+        return process_diyana_intent_classifier(req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# QA ANSWER
+# ============================================================================
+
 @router.post("/qa_answer", response_model=QaAnswerResponse)
 async def diyana_qa_answer(req: QaAnswerRequest):
     # 🔍 LOG DI INGRESSO ALLA ROUTE
@@ -227,7 +251,9 @@ async def diyana_qa_answer(req: QaAnswerRequest):
     return resp
 
 
-# =============== NUOVA ROUTE: domanda extra ===============
+# ============================================================================
+# DOMANDA EXTRA
+# ============================================================================
 
 @router.post("/purchase_extra_question", response_model=PurchaseExtraResponse)
 async def diyana_purchase_extra_question(req: PurchaseExtraRequest):
