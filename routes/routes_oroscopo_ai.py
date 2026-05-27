@@ -14,7 +14,7 @@ from astrobot_core.ai_oroscopo_claude import call_claude_oroscopo_ai
 from astrobot_core.kb.tema_kb import build_kb_oroscopo_glossario
 from astrobot_core.oroscopo_payload_ai import build_oroscopo_payload_ai
 from astrobot_core.oroscopo_pipeline import run_oroscopo_multi_snapshot
-
+from astrobot_auth.report_history import save_report_history
 from auth import UserContext, get_current_user
 from astrobot_auth.credits_logic import (
     PremiumDecision,
@@ -855,7 +855,25 @@ async def oroscopo_ai_endpoint(
             )
         except Exception as e:
             logger.exception("[OROSCOPO_AI] log_usage_event error (success): %r", e)
-
+        
+        try:
+            save_report_history(
+                email=payload.email,
+                user_id=None if is_guest else user.sub,
+                feature=feature_name,
+                tier=tier,
+                lang=lang,
+                report_type=scope,
+                request_json=request_log_success,
+                report_json=oroscopo_ai,
+                usage_log_id=None,
+            )
+        except Exception as e:
+            logger.exception(
+                "[OROSCOPO_AI] save_report_history error: %r",
+                e,
+            )
+        
         return OroscopoResponse(
             status="ok",
             scope=scope,
@@ -1015,6 +1033,27 @@ async def internal_guest_oroscopo_premium(
         lang=lang,
     )
 
+    try:
+        save_report_history(
+            email=body.email,
+            user_id=None,
+            feature=f"{OROSCOPO_FEATURE_KEY_PREFIX}_{scope}",
+            tier="premium",
+            lang=lang,
+            report_type=scope,
+            request_json={
+                "order_id": body.order_id,
+                "payload": payload_dict,
+            },
+            report_json=oroscopo_ai,
+            usage_log_id=None,
+        )
+    except Exception as e:
+        logger.exception(
+            "[INTERNAL_GUEST_OROSCOPO] save_report_history error: %r",
+            e,
+        )
+    
     return {
         "status": "ok",
         "order_id": body.order_id,

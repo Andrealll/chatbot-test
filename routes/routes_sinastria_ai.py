@@ -20,6 +20,7 @@ from astrobot_auth.credits_logic import (
     log_usage_event,
     PremiumDecision,
 )
+from astrobot_auth.report_history import save_report_history
 
 import os
 import json
@@ -672,7 +673,23 @@ async def sinastria_ai_endpoint(
             )
         except Exception as e:
             logger.exception("[SINASTRIA_AI] log_usage_event error (success): %r", e)
-            
+        try:
+            save_report_history(
+                email=log_email,
+                user_id=None if is_guest else user.sub,
+                feature=SINASTRIA_FEATURE_KEY,
+                tier=body.tier,
+                lang=lang,
+                report_type=report_type,
+                request_json=request_log_success,
+                report_json=parsed_ai,
+                usage_log_id=None,
+            )
+        except Exception as e:
+            logger.exception(
+                "[SINASTRIA_AI] save_report_history error: %r",
+                e,
+            )    
         # ====================================================
         # 3a) Grafico sinastria
         # ====================================================
@@ -1023,7 +1040,23 @@ def internal_guest_sinastria(
             )
         except Exception as log_err:
             logger.exception("[INTERNAL_GUEST_SINASTRIA] log_usage_event success: %r", log_err)
-
+        try:
+            save_report_history(
+                email=body.email.strip().lower(),
+                user_id=None,
+                feature=SINASTRIA_FEATURE_KEY,
+                tier="premium",
+                lang=lang,
+                report_type=report_type,
+                request_json=request_log_base,
+                report_json=parsed_ai,
+                usage_log_id=None,
+            )
+        except Exception as e:
+            logger.exception(
+                "[INTERNAL_GUEST_SINASTRIA] save_report_history error: %r",
+                e,
+            )
         return {
             "status": "ok",
             "order_id": body.order_id,

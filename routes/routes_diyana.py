@@ -17,6 +17,7 @@ from astrobot_core.ai_dyana_classifier import (
     DyanaIntentClassifierResponse,
     process_diyana_intent_classifier,
 )
+from astrobot_auth.report_history import save_report_history
 
 from diyana_wallet import (
     PurchaseExtraRequest,
@@ -240,6 +241,26 @@ async def diyana_qa_answer(req: QaAnswerRequest):
 
     # 1) chiamiamo l'engine AI
     resp = process_diyana_qa(req)
+    
+    try:
+        reading = req.reading
+        reading_type = getattr(reading, "reading_type", None) or "unknown"
+        save_report_history(
+            email=getattr(req, "email", None) or "chat@dyana.local",
+            user_id=getattr(req, "user_id", None),
+            feature=f"QA_{reading_type}",
+            tier=getattr(req, "tier", None) or "free",
+            lang=getattr(req, "lang", None),
+            report_type=reading_type,
+            request_json=req.dict(),
+            report_json=resp.dict(),
+            usage_log_id=None,
+        )
+    except Exception as e:
+        logger.exception("[DYANA-LOG] save_report_history qa_answer error: %s", e)
+
+
+
 
     # 2) tentiamo il log su Supabase (non blocca la risposta)
     try:

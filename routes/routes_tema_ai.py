@@ -9,6 +9,7 @@ from astrobot_core.ai_tema_claude import call_claude_tema_ai
 from astrobot_core.calcoli import costruisci_tema_natale
 from astrobot_core.grafici import grafico_tema_natal, build_tema_text_payload
 from astrobot_core.payload_tema_ai import build_payload_tema_ai
+from astrobot_auth.report_history import save_report_history
 
 # --- AUTH + CREDITI ---
 from auth import get_current_user, UserContext
@@ -286,7 +287,29 @@ def internal_guest_tema_premium(
             )
         except Exception as e:
             logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error success order_id=%r err=%r", body.order_id, e)
+            logger.warning(
+            "[INTERNAL_GUEST_TEMA REPORT_HISTORY TRY] email=%s report_keys=%s",
+            log_email,
+            list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+        )
 
+        try:
+            save_report_history(
+                email=log_email,
+                user_id=None,
+                feature=TEMA_AI_FEATURE_KEY,
+                tier="premium",
+                lang=req.lang,
+                report_type=report_type_norm,
+                request_json=guest_request_log_base,
+                report_json=parsed,
+                usage_log_id=None,
+            )
+        except Exception as e:
+            logger.exception(
+                "[INTERNAL_GUEST_TEMA] save_report_history error: %r",
+                e,
+            )
         return {
             "status": "ok",
             "order_id": body.order_id,
@@ -761,6 +784,27 @@ def tema_ai_endpoint(
         except Exception as e:
             logger.exception("[TEMA_AI] log_usage_event error (success): %r", e)
 
+        try:
+            save_report_history(
+                email=log_email or "unknown@guest.local",
+                user_id=None if is_guest else user.sub,
+                feature=TEMA_AI_FEATURE_KEY,
+                tier=body.tier,
+                lang=body.lang,
+                report_type=report_type_norm,
+                request_json=request_log_base,
+                report_json=parsed,
+                usage_log_id=None,
+            )
+        except Exception as e:
+            logger.exception("[TEMA_AI] save_report_history error: %r", e)
+            
+        logger.warning(
+            "[TEMA_AI REPORT_HISTORY TRY] tier=%s email=%s report_keys=%s",
+            body.tier,
+            log_email,
+            list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+        )
         # ====================================================
         # 5) OK
         # ====================================================
