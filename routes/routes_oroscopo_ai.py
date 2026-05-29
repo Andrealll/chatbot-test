@@ -833,8 +833,9 @@ async def oroscopo_ai_endpoint(
             },
         }
 
+        usage_log_id = None
         try:
-            log_usage_event(
+            usage_log_id = log_usage_event(
                 user_id=user.sub,
                 feature=feature_name,
                 tier=tier,
@@ -866,7 +867,7 @@ async def oroscopo_ai_endpoint(
                 report_type=scope,
                 request_json=request_log_success,
                 report_json=oroscopo_ai,
-                usage_log_id=None,
+                usage_log_id=usage_log_id,
             )
         except Exception as e:
             logger.exception(
@@ -1032,7 +1033,26 @@ async def internal_guest_oroscopo_premium(
         payload=data_input,
         lang=lang,
     )
-
+    usage_log_id = None
+    try:
+        usage_log_id = log_usage_event(
+            user_id=f"guest-order-{body.order_id}",
+            feature=f"{OROSCOPO_FEATURE_KEY_PREFIX}_{scope}",
+            tier="premium",
+            role="guest",
+            is_guest=True,
+            billing_mode="guest_paid",
+            cost_paid_credits=0,
+            cost_free_credits=0,
+            request_json={
+                "order_id": body.order_id,
+                "payload": payload_dict,
+            },
+        )
+    except Exception as e:
+        logger.exception("[INTERNAL_GUEST_OROSCOPO] log_usage_event error: %r", e)
+        
+        
     try:
         save_report_history(
             email=body.email,
@@ -1046,7 +1066,7 @@ async def internal_guest_oroscopo_premium(
                 "payload": payload_dict,
             },
             report_json=oroscopo_ai,
-            usage_log_id=None,
+            usage_log_id=usage_log_id,
         )
     except Exception as e:
         logger.exception(

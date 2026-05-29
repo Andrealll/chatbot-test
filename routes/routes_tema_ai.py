@@ -259,8 +259,9 @@ def internal_guest_tema_premium(
                 "tema_vis": tema_vis,
             }
 
+        usage_log_id = None
         try:
-            log_usage_event(
+            usage_log_id = log_usage_event(
                 user_id=f"anon-guest-order-{body.order_id}",
                 feature=TEMA_AI_FEATURE_KEY,
                 tier="premium",
@@ -287,7 +288,8 @@ def internal_guest_tema_premium(
             )
         except Exception as e:
             logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error success order_id=%r err=%r", body.order_id, e)
-            logger.warning(
+
+        logger.warning(
             "[INTERNAL_GUEST_TEMA REPORT_HISTORY TRY] email=%s report_keys=%s",
             log_email,
             list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
@@ -303,7 +305,7 @@ def internal_guest_tema_premium(
                 report_type=report_type_norm,
                 request_json=guest_request_log_base,
                 report_json=parsed,
-                usage_log_id=None,
+                usage_log_id=usage_log_id,
             )
         except Exception as e:
             logger.exception(
@@ -335,8 +337,9 @@ def internal_guest_tema_premium(
     except Exception as e:
         logger.exception("[INTERNAL_GUEST_TEMA] Errore generazione order_id=%r", body.order_id)
 
+        usage_log_id = None
         try:
-            log_usage_event(
+            usage_log_id = log_usage_event(
                 user_id=f"anon-guest-order-{body.order_id}",
                 feature=TEMA_AI_FEATURE_KEY,
                 tier="premium",
@@ -751,8 +754,9 @@ def tema_ai_endpoint(
             tokens_out,
         )
         
+        usage_log_id = None
         try:
-            log_usage_event(
+            usage_log_id = log_usage_event(
                 user_id=user.sub,
                 feature=TEMA_AI_FEATURE_KEY,
                 tier=body.tier,
@@ -794,7 +798,7 @@ def tema_ai_endpoint(
                 report_type=report_type_norm,
                 request_json=request_log_base,
                 report_json=parsed,
-                usage_log_id=None,
+                usage_log_id=usage_log_id,
             )
         except Exception as e:
             logger.exception("[TEMA_AI] save_report_history error: %r", e)

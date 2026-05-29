@@ -567,8 +567,9 @@ async def sinastria_ai_endpoint(
         latency_ms = ai_result["latency_ms"]
 
         if parsed_ai is None:
+            usage_log_id = None
             try:
-                log_usage_event(
+                usage_log_id = log_usage_event(
                     user_id=user.sub,
                     feature=SINASTRIA_FEATURE_KEY,
                     tier=body.tier,
@@ -651,28 +652,32 @@ async def sinastria_ai_endpoint(
             "ai_attempts": ai_attempts,
         }
 
+        usage_log_id = None
         try:
-            log_usage_event(
-                user_id=user.sub,
+            usage_log_id = log_usage_event(
+                user_id=f"guest-order-{body.order_id}",
                 feature=SINASTRIA_FEATURE_KEY,
-                tier=body.tier,
-                role=role,
-                is_guest=is_guest,
-                billing_mode=billing_mode,
-                cost_paid_credits=cost_paid_credits,
-                cost_free_credits=cost_free_credits,
+                tier="premium",
+                role="guest",
+                is_guest=True,
+                billing_mode="guest_paid",
+                cost_paid_credits=0,
+                cost_free_credits=0,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 model=model,
                 latency_ms=latency_ms,
-                paid_credits_before=paid_credits_before,
-                paid_credits_after=state.paid_credits if state is not None else None,
-                free_credits_used_before=free_credits_used_before,
-                free_credits_used_after=state.free_tries_used if state is not None else None,
-                request_json=request_log_success,
+                request_json={
+                    **request_log_base,
+                    "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+                    "ai_attempts": ai_attempts,
+                },
             )
-        except Exception as e:
-            logger.exception("[SINASTRIA_AI] log_usage_event error (success): %r", e)
+        except Exception as log_err:
+            logger.exception("[INTERNAL_GUEST_SINASTRIA] log_usage_event success: %r", log_err)
+
+
+
         try:
             save_report_history(
                 email=log_email,
@@ -683,7 +688,7 @@ async def sinastria_ai_endpoint(
                 report_type=report_type,
                 request_json=request_log_success,
                 report_json=parsed_ai,
-                usage_log_id=None,
+                usage_log_id=usage_log_id,
             )
         except Exception as e:
             logger.exception(
@@ -978,8 +983,9 @@ def internal_guest_sinastria(
         }
 
         if parsed_ai is None:
+            usage_log_id = None
             try:
-                log_usage_event(
+                usage_log_id = log_usage_event(
                     user_id=f"guest-order-{body.order_id}",
                     feature=SINASTRIA_FEATURE_KEY,
                     tier="premium",
@@ -1018,26 +1024,27 @@ def internal_guest_sinastria(
 
         sinastria_ai["result"] = parsed_ai
 
+        usage_log_id = None
         try:
-            log_usage_event(
-                user_id=f"guest-order-{body.order_id}",
-                feature=SINASTRIA_FEATURE_KEY,
-                tier="premium",
-                role="guest",
-                is_guest=True,
-                billing_mode="guest_paid",
-                cost_paid_credits=0,
-                cost_free_credits=0,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                model=model,
-                latency_ms=latency_ms,
-                request_json={
-                    **request_log_base,
-                    "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
-                    "ai_attempts": ai_attempts,
-                },
-            )
+            usage_log_id = log_usage_event(
+            user_id=f"guest-order-{body.order_id}",
+            feature=SINASTRIA_FEATURE_KEY,
+            tier="premium",
+            role="guest",
+            is_guest=True,
+            billing_mode="guest_paid",
+            cost_paid_credits=0,
+            cost_free_credits=0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model,
+            latency_ms=latency_ms,
+            request_json={
+                **request_log_base,
+                "ai_call": {"tokens_in": tokens_in, "tokens_out": tokens_out},
+                "ai_attempts": ai_attempts,
+            },
+        )
         except Exception as log_err:
             logger.exception("[INTERNAL_GUEST_SINASTRIA] log_usage_event success: %r", log_err)
         try:
@@ -1050,7 +1057,7 @@ def internal_guest_sinastria(
                 report_type=report_type,
                 request_json=request_log_base,
                 report_json=parsed_ai,
-                usage_log_id=None,
+                usage_log_id=usage_log_id,
             )
         except Exception as e:
             logger.exception(
