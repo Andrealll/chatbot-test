@@ -655,7 +655,7 @@ async def sinastria_ai_endpoint(
         usage_log_id = None
         try:
             usage_log_id = log_usage_event(
-                user_id=f"guest-order-{body.order_id}",
+                user_id=user.sub,
                 feature=SINASTRIA_FEATURE_KEY,
                 tier="premium",
                 role="guest",
