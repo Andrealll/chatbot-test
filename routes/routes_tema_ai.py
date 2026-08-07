@@ -176,7 +176,18 @@ def internal_guest_tema_premium(
             report_type=report_type_norm,
             output_mode=req.output_mode,
         )
-
+        
+        logger.error(
+            "[PAYLOAD_FLOW_CHECK] flow=guest_internal tier=%s report_type=%s output_mode=%s email=%s payload_keys=%s meta=%r payload_len=%s",
+            "premium",
+            report_type_norm,
+            req.output_mode,
+            log_email,
+            list(payload_ai.keys()) if isinstance(payload_ai, dict) else type(payload_ai).__name__,
+            payload_ai.get("meta") if isinstance(payload_ai, dict) else None,
+            len(json.dumps(payload_ai, ensure_ascii=False)) if isinstance(payload_ai, dict) else None,
+        )
+        
         out = call_claude_tema_ai(
             payload_ai,
             tier="premium",
@@ -306,23 +317,27 @@ def internal_guest_tema_premium(
                     },
                 )
             except Exception as e:
-                logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error parse order_id=%r err=%r", body.order_id, e)
+                logger.exception(
+                    "[INTERNAL_GUEST_TEMA] log_usage_event error parse order_id=%r err=%r",
+                    body.order_id,
+                    e,
+                )
 
-        return {
-            "status": "error",
-            "order_id": body.order_id,
-            "email": log_email,
-            "parse_error": parse_error,
-            "raw_preview": raw_text[:500],
-            "tema_vis": tema_vis,
-            "result": {
-                "error": "JSON non valido" if raw_text else "Risposta vuota",
+            return {
+                "status": "error",
+                "order_id": body.order_id,
+                "email": log_email,
                 "parse_error": parse_error,
                 "raw_preview": raw_text[:500],
-                "content": None,
-            },
-            "ai_debug": ai_debug,
-        }
+                "tema_vis": tema_vis,
+                "result": {
+                    "error": "JSON non valido" if raw_text else "Risposta vuota",
+                    "parse_error": parse_error,
+                    "raw_preview": raw_text[:500],
+                    "content": None,
+                },
+                "ai_debug": ai_debug,
+            }
 
         usage_log_id = None
         try:
@@ -352,7 +367,11 @@ def internal_guest_tema_premium(
                 },
             )
         except Exception as e:
-            logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error success order_id=%r err=%r", body.order_id, e)
+            logger.exception(
+                "[INTERNAL_GUEST_TEMA] log_usage_event error success order_id=%r err=%r",
+                body.order_id,
+                e,
+            )
 
         logger.warning(
             "[INTERNAL_GUEST_TEMA REPORT_HISTORY TRY] email=%s report_keys=%s",
@@ -377,6 +396,7 @@ def internal_guest_tema_premium(
                 "[INTERNAL_GUEST_TEMA] save_report_history error: %r",
                 e,
             )
+
         return {
             "status": "ok",
             "order_id": body.order_id,
@@ -596,6 +616,18 @@ def tema_ai_endpoint(
         except Exception as e:
             logger.exception("[TEMA_AI] Errore build payload AI")
             raise HTTPException(status_code=500, detail=f"Errore build payload AI: {e}")
+
+        logger.error(
+            "[PAYLOAD_FLOW_CHECK] flow=tema_ai_direct tier=%s report_type=%s output_mode=%s email=%s payload_keys=%s meta=%r payload_len=%s",
+            body.tier,
+            report_type_norm,
+            body.output_mode,
+            log_email,
+            list(payload_ai.keys()) if isinstance(payload_ai, dict) else type(payload_ai).__name__,
+            payload_ai.get("meta") if isinstance(payload_ai, dict) else None,
+            len(json.dumps(payload_ai, ensure_ascii=False)) if isinstance(payload_ai, dict) else None,
+        )
+
 
         # ====================================================
         # 3) Chiamata Claude
