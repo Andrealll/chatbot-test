@@ -184,36 +184,94 @@ def internal_guest_tema_premium(
             report_type=report_type_norm,
         )
 
+        logger.warning(
+            "[INTERNAL_GUEST_TEMA DEBUG OUT] tier=%s report_type=%s out_type=%s out_keys=%s",
+            "premium",
+            report_type_norm,
+            type(out).__name__,
+            list(out.keys()) if isinstance(out, dict) else None,
+        )
+        logger.warning(
+            "[INTERNAL_GUEST_TEMA DEBUG OUT RESULT] %s",
+            repr(out.get("result"))[:2000] if isinstance(out, dict) else repr(out)[:2000],
+        )
+        logger.warning(
+            "[INTERNAL_GUEST_TEMA DEBUG OUT AI_DEBUG] %s",
+            repr(out.get("ai_debug"))[:2000] if isinstance(out, dict) else None,
+        )
+
+        # ====================================================
+        # 3a) Parse/shape robusto - IDENTICO A /tema_ai
+        # ====================================================
         ai_dbg = out.get("ai_debug") or {}
         raw_text = ai_dbg.get("raw_text") or ""
+
         r = out.get("result")
 
-        usage = (ai_dbg.get("usage") or {}) if isinstance(ai_dbg, dict) else {}
-        tokens_in = int(usage.get("input_tokens", 0) or 0)
-        tokens_out = int(usage.get("output_tokens", 0) or 0)
-        elapsed_sec = ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None
-        model = ai_dbg.get("model") if isinstance(ai_dbg, dict) else None
-        latency_ms = (float(elapsed_sec) * 1000.0) if isinstance(elapsed_sec, (int, float)) else None
+        parsed: Optional[Dict[str, Any]] = None
+        parse_error: Optional[str] = None
 
-        parsed = None
-        parse_error = None
-
-        if isinstance(r, dict) and "result" in r and ("ai_debug" in r or "error" in r or "parse_error" in r):
+        if isinstance(r, dict) and "result" in r and (
+            "ai_debug" in r or "error" in r or "parse_error" in r
+        ):
             r = r.get("result")
 
-        if isinstance(r, dict) and not r.get("error"):
-            parsed = r
-        elif isinstance(r, str) and r.strip():
-            try:
-                tmp = json.loads(r)
-                if isinstance(tmp, dict) and not tmp.get("error"):
-                    parsed = tmp
-                else:
-                    parse_error = "Risposta JSON non valida"
-            except Exception as e:
-                parse_error = f"result string non parseabile: {e}"
+        if isinstance(r, dict) and r.get("error"):
+            parsed = None
+            parse_error = r.get("parse_error") or r.get("detail") or r.get("error")
         else:
-            parse_error = f"Risposta non valida type={type(r).__name__}"
+            if isinstance(r, dict):
+                parsed = r
+            elif isinstance(r, str) and r.strip():
+                try:
+                    tmp = json.loads(r)
+                    if isinstance(tmp, dict) and not tmp.get("error"):
+                        parsed = tmp
+                    else:
+                        parsed = None
+                        if isinstance(tmp, dict):
+                            parse_error = (
+                                tmp.get("parse_error")
+                                or tmp.get("detail")
+                                or tmp.get("error")
+                                or "JSON non valido"
+                            )
+                        else:
+                            parse_error = "Risposta non in formato JSON (dict)."
+                except Exception as e:
+                    parsed = None
+                    parse_error = f"result string non parseabile: {e}"
+            else:
+                parsed = None
+                parse_error = (
+                    f"Risposta non in formato JSON (dict). type={type(r).__name__}"
+                )
+
+        ai_debug = {"result": parsed, "ai_debug": ai_dbg}
+
+        # ====================================================
+        # 3b) Usage extract - IDENTICO A /tema_ai
+        # ====================================================
+        usage = {}
+        try:
+            usage = (ai_dbg.get("usage") or {}) if isinstance(ai_dbg, dict) else {}
+        except Exception:
+            usage = {}
+
+        tokens_in = int(usage.get("input_tokens", 0) or 0)
+        tokens_out = int(usage.get("output_tokens", 0) or 0)
+
+        model = None
+        latency_ms: Optional[float] = None
+        elapsed_sec = None
+        try:
+            model = ai_dbg.get("model") if isinstance(ai_dbg, dict) else None
+            elapsed_sec = ai_dbg.get("elapsed_sec") if isinstance(ai_dbg, dict) else None
+            if isinstance(elapsed_sec, (int, float)):
+                latency_ms = float(elapsed_sec) * 1000.0
+        except Exception:
+            model = None
+            latency_ms = None
 
         if parsed is None:
             try:
@@ -257,6 +315,13 @@ def internal_guest_tema_premium(
                 "parse_error": parse_error,
                 "raw_preview": raw_text[:500],
                 "tema_vis": tema_vis,
+                "result": {
+                    "error": "JSON non valido" if raw_text else "Risposta vuota",
+                    "parse_error": parse_error,
+                    "raw_preview": raw_text[:500],
+                    "content": None,
+                },ai_debug": {
+                "ai_debug": ai_debug,
             }
 
         usage_log_id = None
@@ -325,11 +390,7 @@ def internal_guest_tema_premium(
             "tema_vis": tema_vis,
             "payload_ai": payload_ai,
             "content": parsed,
-            "ai_debug": {
-                "usage": usage,
-                "model": model,
-                "elapsed_sec": elapsed_sec,
-            },
+            "ai_debug": ai_debug,
         }
 
     except HTTPException:
