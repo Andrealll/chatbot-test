@@ -96,11 +96,16 @@ def hello():
 # Startup: stampa le route registrate
 @app.on_event("startup")
 async def _debug_routes():
-    print("\n=== ROUTES REGISTRATE ===")
+    print("=== ROUTES REGISTRATE ===")
     for r in app.routes:
-        print(f"{r.path}  {getattr(r, 'methods', None)}")
-    print("=== FINE ROUTES ===\n")
+        path = getattr(r, "path", None)
+        methods = getattr(r, "methods", None)
 
+        if not path:
+            print(f"[SKIP ROUTE DEBUG] type={type(r).__name__}")
+            continue
+
+        print(f"{path}  {methods}")
 
 # ---------------------------------------------------------
 # MODELLI (pydantic)
