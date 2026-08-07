@@ -308,21 +308,21 @@ def internal_guest_tema_premium(
             except Exception as e:
                 logger.exception("[INTERNAL_GUEST_TEMA] log_usage_event error parse order_id=%r err=%r", body.order_id, e)
 
-            return {
-                "status": "error",
-                "order_id": body.order_id,
-                "email": log_email,
+        return {
+            "status": "error",
+            "order_id": body.order_id,
+            "email": log_email,
+            "parse_error": parse_error,
+            "raw_preview": raw_text[:500],
+            "tema_vis": tema_vis,
+            "result": {
+                "error": "JSON non valido" if raw_text else "Risposta vuota",
                 "parse_error": parse_error,
                 "raw_preview": raw_text[:500],
-                "tema_vis": tema_vis,
-                "result": {
-                    "error": "JSON non valido" if raw_text else "Risposta vuota",
-                    "parse_error": parse_error,
-                    "raw_preview": raw_text[:500],
-                    "content": None,
-                },ai_debug": {
-                "ai_debug": ai_debug,
-            }
+                "content": None,
+            },
+            "ai_debug": ai_debug,
+        }
 
         usage_log_id = None
         try:
