@@ -1,5 +1,6 @@
 import json
 import logging
+import hashlib
 from typing import Dict, Any, Optional, Literal
 from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from pydantic import BaseModel, Field
@@ -186,6 +187,22 @@ def internal_guest_tema_premium(
             list(payload_ai.keys()) if isinstance(payload_ai, dict) else type(payload_ai).__name__,
             payload_ai.get("meta") if isinstance(payload_ai, dict) else None,
             len(json.dumps(payload_ai, ensure_ascii=False)) if isinstance(payload_ai, dict) else None,
+        )
+
+        payload_ai_canonical = json.dumps(
+            payload_ai,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        logger.warning(
+            "[TEMA_INPUT_HASH] flow=guest_internal sha256=%s len=%s tier=%s lang=%s report_type=%s output_mode=%s",
+            hashlib.sha256(payload_ai_canonical.encode("utf-8")).hexdigest(),
+            len(payload_ai_canonical),
+            "premium",
+            req.lang,
+            report_type_norm,
+            req.output_mode,
         )
         
         out = call_claude_tema_ai(
@@ -626,6 +643,22 @@ def tema_ai_endpoint(
             list(payload_ai.keys()) if isinstance(payload_ai, dict) else type(payload_ai).__name__,
             payload_ai.get("meta") if isinstance(payload_ai, dict) else None,
             len(json.dumps(payload_ai, ensure_ascii=False)) if isinstance(payload_ai, dict) else None,
+        )
+
+        payload_ai_canonical = json.dumps(
+            payload_ai,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        logger.warning(
+            "[TEMA_INPUT_HASH] flow=tema_ai_direct sha256=%s len=%s tier=%s lang=%s report_type=%s output_mode=%s",
+            hashlib.sha256(payload_ai_canonical.encode("utf-8")).hexdigest(),
+            len(payload_ai_canonical),
+            body.tier,
+            body.lang,
+            report_type_norm,
+            body.output_mode,
         )
 
 
