@@ -290,6 +290,17 @@ except Exception as e:
     print(f"[WARN] routes_tema_ai non caricato: {e}")
 
 # ---------------------------------------------------------
+# ROUTER TEMA_AI V2 (parallelo al legacy)
+# ---------------------------------------------------------
+try:
+    from routes.routes_tema_ai_v2 import router as tema_ai_v2_router
+
+    app.include_router(tema_ai_v2_router)
+    print("[DEBUG] routes_tema_ai_v2 included")
+except Exception as e:
+    print(f"[WARN] routes_tema_ai_v2 non caricato: {e}")
+
+# ---------------------------------------------------------
 # ROUTER DYANA (opzionale)
 # ---------------------------------------------------------
 try:
